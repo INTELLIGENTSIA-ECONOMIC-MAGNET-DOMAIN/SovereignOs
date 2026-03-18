@@ -1,0 +1,114 @@
+.vault-wrapper {
+    background: rgba(1, 2, 3, 0.9);
+    height: 100%; padding: 20px;
+    font-family: 'Ubuntu', monospace;
+    color: #fff;
+}
+
+.asset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 15px; margin: 20px 0;
+}
+
+.asset-card {
+    background: var(--glass);
+    padding: 15px;
+    border: 1px solid rgba(255,255,255,0.05);
+    backdrop-filter: blur(10px);
+    transition: transform 0.2s ease;
+}
+
+.asset-card:hover {
+    transform: translateY(-5px);
+    background: var(--glass-hover);
+    border-color: rgba(255,255,255,0.2);
+}
+
+.asset-symbol {
+    font-size: 10px; font-weight: 900;
+    color: var(--mtaa-green);
+    letter-spacing: 1px;
+}
+
+.asset-balance {
+    font-size: 24px;
+    font-weight: 200;
+    margin-top: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.service-logger {
+    margin-top: 30px;
+    border-top: 1px dashed rgba(255,255,255,0.1);
+    padding-top: 20px;
+}
+
+.mint-btn {
+    background: #a855f7;
+    color: #fff; border: none;
+    padding: 10px 20px;
+    font-weight: 900; cursor: pointer;
+    clip-path: polygon(10% 0, 100% 0, 90% 100%, 0 100%);
+}
+
+.vault-wrapper { color: #fff; font-family: monospace; }
+.hidden { display: none; }
+.vault-tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+.v-tab { background: none; border: 1px solid #444; color: #888; padding: 5px 15px; cursor: pointer; font-size: 11px; }
+.v-tab.active { border-color: #a855f7; color: #a855f7; background: rgba(168, 85, 247, 0.1); }
+.admin-alert { border-color: #ffd700; color: #ffd700; }
+
+.queue-item { 
+    background: rgba(255,255,255,0.05); 
+    padding: 15px; 
+    margin-bottom: 10px; 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
+    border: 1px solid rgba(255, 215, 0, 0.2);
+}
+.approve-btn { 
+    background: #00ff41; color: #000; border: none; padding: 10px; 
+    font-weight: bold; cursor: pointer; font-size: 10px;
+}
+.approve-btn:hover { background: #fff; }
+.q-info p { font-size: 10px; opacity: 0.6; margin: 5px 0 0 0; }
+
+.vault-wrapper { padding: 15px; background: #050505; height: 100%; display: flex; flex-direction: column; gap: 15px; }
+.glitch-text { font-size: 1.2rem; font-weight: 900; color: #a855f7; letter-spacing: 2px; }
+
+/* Asset Cards */
+.asset-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.asset-card { 
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
+    border-top: 3px solid var(--accent); padding: 10px; position: relative; overflow: hidden;
+}
+.asset-label { font-size: 0.6rem; color: #888; display: flex; flex-direction: column; }
+.asset-value { font-size: 1.2rem; font-weight: bold; margin-top: 5px; color: #fff; }
+
+/* UI Panes */
+.pane-ui { background: rgba(255,255,255,0.02); padding: 20px; border: 1px solid #222; border-radius: 4px; }
+.input-stack label { display: block; font-size: 0.6rem; color: #a855f7; margin-bottom: 5px; }
+input, select { 
+    width: 100%; background: #111; border: 1px solid #333; color: #fff; 
+    padding: 8px; margin-bottom: 15px; font-family: monospace; 
+}
+
+.action-btn { 
+    width: 100%; padding: 12px; background: #a855f7; color: #fff; border: none; 
+    font-weight: 900; cursor: pointer; transition: 0.3s;
+}
+.action-btn:hover { background: #fff; color: #000; }
+.swap-theme { background: #00d4ff; }
+
+/* History */
+.history-item { 
+    display: flex; justify-content: space-between; padding: 10px; 
+    border-bottom: 1px solid #111; font-size: 0.8rem; 
+}
+.h-desc { color: #666; font-size: 0.7rem; margin-left: 10px; }
+
+/* Admin */
+.queue-card { border: 1px solid #ffd70033; padding: 10px; margin-bottom: 10px; background: #ffd70005; }
+.q-header { display: flex; justify-content: space-between; font-weight: bold; font-size: 0.7rem; }

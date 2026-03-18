@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="./css/apps/terminal.css">
     <link rel="stylesheet" href="./css/apps/time.css">
     <link rel="stylesheet" href="./css/apps/vault.css">
+    <link rel="stylesheet" href="./css/apps/wallet.css">
     <link rel="stylesheet" href="./css/effects/animations.css">
     <link rel="stylesheet" href="./css/effects/overlays.css">
     <link rel="stylesheet" href="./css/effects/transitions.css">
@@ -53,22 +54,26 @@
 </head>
 <body class="sovereign-environment">
     <!-- SPLASH SCREEN for Thealcohesion OS BOOT-->
-    <div id="os-splash" style="position: fixed; inset: 0; background: #000; z-index: 20000; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'Inter', sans-serif;">
-    <div id="splash-logo-container" style="position: relative; width: 200px; height: 200px; margin-bottom: 20px;">
-        <img src="./images/logo.png" id="vpu-logo" style="width: 100%; opacity: 0.5;">
-        <div id="vpu-glow" style="position: absolute; inset: 0; background: #a445ff; filter: blur(40px); opacity: 0.3; border-radius: 50%;"></div>
+    <div id="os-splash">
+    <div class="bg-animation-wrap">
+        <div class="sweep bg-blue"></div>
+        <div class="sweep bg-purple"></div>
+        <div class="sweep bg-black-sweep"></div>
     </div>
 
-    <h1 style="color: #fff; margin: 0; font-size: 28px; letter-spacing: 1px;">Thealcohesion VPU</h1>
-    <p style="color: #a445ff; margin: 5px 0 30px; font-size: 14px; opacity: 0.8;">Hobnob city of cosmopolitan</p>
+    <div class="container" id="loaderContainer">
+        <img src="./images/logo.png" alt="Logo" class="logo"/>
+        <h1>Thealcohesion VPU</h1>
+        <h2>Hobnob city of cosmopolitan</h2>
 
-    <div style="width: 300px; height: 12px; background: #111; border: 1px solid #333; border-radius: 20px; overflow: hidden; position: relative;">
-        <div id="splash-bar" style="width: 0%; height: 100%; background: #a445ff; transition: width 0.1s linear;"></div>
-        <div id="splash-percent" style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: bold; color: #fff;">0%</div>
-    </div>
+        <div class="progress-container">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+                <span id="progressText">0%</span>
+            </div>
+        </div>
 
-    <div id="boot-logs" style="margin-top: 25px; width: 300px; height: 80px; background: rgba(0, 255, 65, 0.05); border: 1px solid #00ff41; border-radius: 6px; padding: 10px; font-family: 'Courier New', monospace; font-size: 10px; color: #00ff41; overflow: hidden;">
-        <div id="log-content">Initializing Thealcohesion framework...</div>
+        <div class="status-text" id="statusText">Initializing Thealcohesion framework...</div>
     </div>
 </div>
     <!-- LOGIN GATE -->
@@ -251,7 +256,7 @@
      </script>
      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
      <script src="https://leaflet.github.io/Leaflet.heat/dist/leaflet-heat.js"></script>
-     <script type="module" src="./js/os-core/boot.js"></script>
-    <script type="module" src="./js/os-core/os.js"></script>
+     <script type="module" src="../core/boot.js"></script>
+    <script type="module" src="../core/os.js"></script>
 </body>
 </html>

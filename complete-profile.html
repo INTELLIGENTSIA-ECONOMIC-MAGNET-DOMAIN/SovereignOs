@@ -465,12 +465,21 @@
             return;
         }
 
+        // Try both keys to be safe, fallback to a fresh generation if both are missing
+        const activeHwId = localStorage.getItem('vpu_hw_id') || localStorage.getItem('hw_id');
+
+        if (!activeHwId || activeHwId === "null") {
+            console.error("CRITICAL: Hardware Fingerprint missing from LocalStorage.");
+            showSovModal("HARDWARE_ERROR", "Device Fingerprint Lost. Please refresh the page.", "#ff4444");
+            return;
+        }
+
         const btn = document.getElementById('final-btn');
         btn.innerText = "WRITING_TO_CORE...";
         btn.disabled = true;
 
         const payload = {
-            hw_id: localStorage.getItem('vpu_hw_id'),
+            hw_id: localStorage.getItem('hw_id'),
             password: document.getElementById('p-pass').value,
             user_name: document.getElementById('p-username').value,
             date_of_birth: document.getElementById('p-dob').value,

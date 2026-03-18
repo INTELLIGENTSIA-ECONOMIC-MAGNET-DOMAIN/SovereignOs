@@ -1,4 +1,4 @@
-import { triggerRealPanic } from './Thealcohesion-core/js/os-core/panic.js';
+import { triggerRealPanic } from './core/panic.js';
 // UI REACTIVITY (Parallax)
 document.addEventListener('mousemove', (e) => {
     const xPos = (e.clientX / window.innerWidth) - 0.5;

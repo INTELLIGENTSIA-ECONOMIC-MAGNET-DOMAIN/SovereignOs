@@ -11,7 +11,8 @@ const app = express();
 app.use(helmet());
 app.disable('x-powered-by');
 app.use(cors()); // Allows the OS Frontend to talk to this Backend
-app.use(express.json());
+app.use(express.json({ limit: '2mb' })); 
+app.use(express.urlencoded({ limit: '2mb', extended: true }));
 
 const rateLimit = require('express-rate-limit');
 
@@ -381,6 +382,7 @@ app.post('/api/spacs/interest', async (req, res) => {
 
 // Verify Membership and Finalize Provisioning
 app.post('/api/spacs/verify-provision', async (req, res) => {
+    console.log("Provision Request Body:", req.body);
     const { 
         hw_id, official_name, membership_no, license_key, 
         email, phone, phone_code, country 
@@ -431,18 +433,40 @@ app.post('/api/spacs/verify-provision', async (req, res) => {
         }
 
         // 4. STAGE 4: PROVISIONING FINALIZATION
+        // Update identity states
         await client.query(
             `UPDATE person SET identity_state = 'PREVERIFIED', registration_state = 'PRECOMPLETE' WHERE id = $1`,
             [personId]
         );
 
+        // Officially link this specific hardware to this person
+        const bindResult = await client.query(
+            `UPDATE security_device SET person_id = $1 WHERE device_fingerprint_hash LIKE $2`,
+            [personId, `%${hw_id}%`]
+        );
+
+        if (bindResult.rowCount === 0) {
+            console.error(`!!! BINDING_FAILURE: No device found matching ${hw_id}`);
+            // If this fails, Step 3 will always fail.
+        }
+
+        // THE BIRTHRIGHT ALLOTMENT: Explicitly setting the 100MB quota
         await client.query(
-            `UPDATE member_birthright SET provisioning_status = 'PROVISIONED', updated_at = NOW() WHERE person_id = $1`,
+            `UPDATE member_birthright 
+            SET provisioning_status = 'PROVISIONED', 
+                storage_quota_mb = 100, 
+                updated_at = NOW() 
+            WHERE person_id = $1`,
             [personId]
         );
 
         await client.query('COMMIT');
-        res.json({ success: true, shell_url: "/builds/core-os-v1.iso" });
+        console.log(`>>> PROVISIONING_COMPLETE: ${official_name} [${membership_no}] bound to HW [${hw_id.substring(0,8)}]`);
+        res.json({ 
+            success: true, 
+            shell_url: "/builds/core-os-v1.iso",
+            allotment_mb: 100 // Feedback for the UI
+        });
 
     } catch (err) {
         await client.query('ROLLBACK');
@@ -452,34 +476,33 @@ app.post('/api/spacs/verify-provision', async (req, res) => {
         client.release();
     }
 });
+
 // --- COMPLETE PROFILE (Final Identity Handshake) ---
 app.post('/api/spacs/complete-profile', async (req, res) => {
     const { 
-        hw_id, 
-        password, 
-        user_name, 
-        date_of_birth, 
-        gender, 
-        bio, 
-        titles, 
-        avatar 
+        hw_id, password, user_name, date_of_birth, 
+        gender, bio, titles, avatar 
     } = req.body;
+
+    // GUARD: Ensure we aren't processing a null hardware ID
+    if (!hw_id || hw_id === "null") {
+        return res.status(400).json({ error: "DEVICE_VECTOR_MISSING" });
+    }
 
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
 
-        // 1. LOCATE THE PERSON VIA HARDWARE BINDING
-        // We find the person associated with the security device that sent this request
-        const bindingQuery = `
-            SELECT p.id, p.identity_state 
-            FROM person p
-            JOIN security_device sd ON sd.person_id = p.id
-            WHERE sd.device_fingerprint_hash = $1
-            LIMIT 1
-        `;
-        const bindingResult = await client.query(bindingQuery, [hw_id]);
+        // 1. LOCATE VIA HARDWARE (Using LIKE for resilience)
+        const bindingResult = await client.query(
+            `SELECT p.id, mb.storage_quota_mb 
+             FROM person p
+             JOIN security_device sd ON sd.person_id = p.id
+             LEFT JOIN member_birthright mb ON p.id = mb.person_id
+             WHERE sd.device_fingerprint_hash LIKE $1 LIMIT 1`,
+            [`%${hw_id}%`]
+        );
 
         if (bindingResult.rows.length === 0) {
             throw new Error("DEVICE_NOT_RECOGNIZED: Complete Provisioning Step 2 first.");
@@ -487,95 +510,67 @@ app.post('/api/spacs/complete-profile', async (req, res) => {
 
         const personId = bindingResult.rows[0].id;
 
-        // 2. UPDATE PRIMARY IDENTITY
-        // We update the fields, set status to ACTIVE, and stage to COMPLETE
+        // 2. UPDATE IDENTITY 
+        // We use jsonb_build_object to safely merge the bio into contact_meta
         const updatePersonQuery = `
             UPDATE person SET 
                 user_name = $1, 
                 date_of_birth = $2, 
                 gender = $3, 
-                contact_meta = jsonb_set(COALESCE(contact_meta, '{}'), '{bio}', $4),
+                contact_meta = COALESCE(contact_meta, '{}'::jsonb) || jsonb_build_object('bio', $4::text),
                 identity_state = 'VERIFIED',
                 registration_state = 'COMPLETE',
                 updated_at = NOW()
             WHERE id = $5
         `;
         await client.query(updatePersonQuery, [
-            user_name, 
-            date_of_birth, 
-            gender, 
-            JSON.stringify(bio), 
-            personId
+            user_name, date_of_birth, gender, bio || "", personId
         ]);
 
-        // --- NEW HANDLE TITLES IN person_titles TABLE ---
-        if (titles && titles.length > 0) { 
-            // Clear old titles first to prevent duplicates if re-syncing
-            await client.query(`DELETE FROM person_titles WHERE person_id = $1`, [personId]);
+        // 3. SECURE PASSWORD
+        const saltRounds = 12;
+        const passwordHash = await bcrypt.hash(password, saltRounds);
+        await client.query(
+            `UPDATE person SET password_hash = $1 WHERE id = $2`,
+            [passwordHash, personId]
+        );
 
-            // Insert each title provided in the payload
-            for (let title of titles) {
-                await client.query(
-                    `INSERT INTO person_titles (person_id, title) VALUES ($1, $2)`,
-                    [personId, title]
-                );
-            }
-        }
-
-        // --- HANDLE AVATAR (person_media table)
+        // 4. HANDLE AVATAR (TEXT column ensures 18KB+ is safe)
         if (avatar) {
             await client.query(
                 `DELETE FROM person_media WHERE person_id = $1 AND media_type = 'profile'`, 
                 [personId]
             );
             await client.query(
-                `INSERT INTO person_media (person_id, url, media_type) 
-                 VALUES ($1, $2, 'profile')`,
+                `INSERT INTO person_media (person_id, url, media_type) VALUES ($1, $2, 'profile')`,
                 [personId, avatar]
             );
         }
 
-
-       // -3. SECURE PASSWORDS ---
-        // Hash the password and update the 'password_hash' column directly in the 'person' table
-        const saltRounds = 12;
-        const passwordHash = await bcrypt.hash(password, saltRounds);
-
-        // Corrected: No person_security table exists. We update the person record created/updated in step 1.
-        const securityQuery = `
-            UPDATE person 
-            SET password_hash = $1, 
-                updated_at = NOW() 
-            WHERE id = $2
-        `;
-        await client.query(securityQuery, [passwordHash, personId]);
-
-        // 4. ATTEST THE DEVICE AS FULLY INITIALIZED
+        // 5. ATTEST DEVICE
         await client.query(
-            `UPDATE security_device SET enclave_attested = TRUE WHERE device_fingerprint_hash = $1`,
-            [hw_id]
+            `UPDATE security_device SET enclave_attested = TRUE WHERE person_id = $1`,
+            [personId]
         );
 
         await client.query('COMMIT');
-
-        console.log(`>>> INGRESS_COMPLETE: ${user_name} has entered the Enclave.`);
+        console.log(`>>> INGRESS_COMPLETE: ${user_name} is fully synchronized.`);
 
         res.status(200).json({ 
             success: true, 
-            message: "IDENTITY_SYNCHRONIZED",
             redirect: "./Thealcohesion-core/index.html" 
         });
 
     } catch (err) {
         await client.query('ROLLBACK');
         console.error("INGRESS_FAULT:", err.message);
-        res.status(500).json({ error: err.message || "DATABASE_UPLINK_CRITICAL" });
+        res.status(500).json({ error: err.message });
     } finally {
         client.release();
     }
 });
-
 // API: Check Citizenship Approval Status
+// API: Check Citizenship Approval Status (Strict Allotment Enforcement)
 app.get('/api/spacs/check-status', async (req, res) => {
     res.set({
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -586,15 +581,16 @@ app.get('/api/spacs/check-status', async (req, res) => {
     const { hw_id } = req.query;
 
     try {
-        // IMPROVED QUERY: Join member_birthright to see the actual provisioning status
         const result = await pool.query(
             `SELECT 
                 p.identity_state, 
-                p.is_frozen, 
                 p.registration_state,
-                mb.provisioning_status 
-             FROM person p
-             JOIN security_device sd ON sd.person_id = p.id
+                p.membership_no, 
+                p.license_key,
+                mb.provisioning_status,
+                mb.storage_quota_mb
+             FROM security_device sd
+             JOIN person p ON sd.person_id = p.id
              LEFT JOIN member_birthright mb ON p.id = mb.person_id
              WHERE sd.device_fingerprint_hash = $1`, 
             [hw_id]
@@ -602,33 +598,42 @@ app.get('/api/spacs/check-status', async (req, res) => {
 
         const user = result.rows[0];
 
-        if (!user) {
-            return res.json({ status: 'NOT_FOUND' });
-        }
+        if (!user) return res.json({ status: 'NOT_FOUND' });
 
-        if (user.is_frozen) {
-            return res.json({ status: 'FROZEN' });
-        }
+        // --- THE 100MB GATE ---
+        // We only consider the machine "Provisioned" if storage_quota_mb is exactly 100 (or more)
+        const hasAllotment = user.storage_quota_mb && parseInt(user.storage_quota_mb) >= 100;
+        const isProvisioned = user.provisioning_status === 'PROVISIONED';
 
-        // Normalize states to uppercase to avoid case-sensitivity bugs
-        const idState = (user.identity_state || "").toUpperCase();
-        const provStatus = (user.provisioning_status || "").toUpperCase();
-        const regState = (user.registration_state || "").toLowerCase();
-
-        // SUCCESS CONDITION: 
-        // Either they are fully ACTIVE, or Form B marked them as VERIFIED + PROVISIONED
-        if (idState === 'ACTIVE' || 
-           (idState === 'VERIFIED' && provStatus === 'PROVISIONED') ||
-           (regState === 'COMPLETE')) {
-            
+        // 1. REDIRECT TO FORM B: Only if keys are present but hardware isn't provisioned yet
+        if (user.membership_no && user.license_key && !isProvisioned) {
             return res.json({ 
-                status: 'APPROVED',
-                provision_status: 'PROVISIONED' 
+                status: 'APPROVED', 
+                membership_no: user.membership_no, 
+                license_key: user.license_key 
             });
         }
 
-        // If they are still a PROSPECT, they stay in the waiting room
-        res.json({ status: 'UNVERIFIED' });
+        // 2. PROCEED TO COMPLETE PROFILE: Only if state is PREVERIFIED AND 100MB is confirmed
+        if (isProvisioned && hasAllotment && user.identity_state === 'PREVERIFIED') {
+            return res.json({ 
+                status: 'REQUIRE_PROFILE', // This signal tells loading.js to move to the final step
+                provision_status: 'PROVISIONED',
+                allotment: user.storage_quota_mb
+            });
+        }
+
+        // 3. FULLY ACTIVE: If already completed
+        if (user.registration_state === 'COMPLETE') {
+            return res.json({ status: 'PROVISIONED' });
+        }
+
+        // 4. WAITING ROOM: If still in draft or pending admin keys
+        res.json({ 
+            status: 'UNVERIFIED', 
+            provision_status: user.provisioning_status || 'PENDING',
+            allotment_status: hasAllotment ? 'AWARDED' : 'WAITING'
+        });
 
     } catch (err) {
         console.error("CHECK_STATUS_FAULT:", err.message);
@@ -637,6 +642,47 @@ app.get('/api/spacs/check-status', async (req, res) => {
 });
 
 
+// --- VFS HARDWARE BINDING & BIRTHRIGHT CHECK ---
+app.post('/api/spacs/vfs-sync', async (req, res) => {
+    const { hw_id } = req.body;
+
+    if (!hw_id) return res.status(400).json({ error: "HARDWARE_ID_MISSING" });
+
+    try {
+        // Query to verify the hardware belongs to a provisioned person
+        const result = await pool.query(
+            `SELECT p.user_name, mb.storage_quota_mb, mb.provisioning_status
+             FROM security_device sd
+             JOIN person p ON sd.person_id = p.id
+             JOIN member_birthright mb ON p.id = mb.person_id
+             WHERE sd.device_fingerprint_hash = $1 LIMIT 1`,
+            [hw_id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(403).json({ error: "UNAUTHORIZED_HARDWARE" });
+        }
+
+        const data = result.rows[0];
+
+        // Check if the 100MB has actually been activated (Provisioned)
+        if (data.provisioning_status !== 'PROVISIONED') {
+            return res.status(403).json({ error: "BIRTHRIGHT_NOT_PROVISIONED" });
+        }
+
+        res.json({
+            success: true,
+            status: "SYNCHRONIZED",
+            allotment: data.storage_quota_mb, // Returns 100
+            vault_id: `VAULT_${data.user_name.toUpperCase()}`
+        });
+
+    } catch (err) {
+        console.error("VFS_SYNC_CRITICAL_FAILURE:", err.message);
+        res.status(500).json({ error: "CORE_OFFLINE" });
+    }
+});
+
 /**
  * SOVEREIGN AUTH MIDDLEWARE
  * Ensures the request is coming from a validated Enclave session.
@@ -644,6 +690,7 @@ app.get('/api/spacs/check-status', async (req, res) => {
 const verifySovereignKey = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const machineSig = req.headers['x-machine-id'];
+    const token = authHeader && authHeader.split(' ')[1]; // Extract token from "Bearer <token>"
 
     // For the 2025-12-26 Allotment Protocol, we require both a Bearer token and a HW Signature
     if (!authHeader || !machineSig) {
@@ -653,6 +700,13 @@ const verifySovereignKey = (req, res, next) => {
             message: "SOVEREIGN_ERR: ENCLAVE_UPLINK_REQUIRED" 
         });
     }
+
+    if (!token) return res.status(401).json({ error: "PASSPORT_REQUIRED" });
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ error: "INVALID_PASSPORT" });
+        req.user = user; // This allows req.user.id to be used in /allotment/claim
+        next();
+    });
 
     // Optional: Add logic here to verify the token against your session store
     // For now, we will allow the "Bearer temp_key" or your specific sessionKey
@@ -729,21 +783,218 @@ app.get('/api/vpu/registry', verifySovereignKey, async (req, res) => {
 
 app.post('/api/vpu/allotment/claim', verifySovereignKey, async (req, res) => {
     const { allotmentCode } = req.body;
-    const userId = req.user.id;
+    
+    // Safety: Ensure ID comes from the JWT payload set by verifySovereignKey
+    const userId = req.user?.id; 
 
+    if (!allotmentCode) {
+        return res.status(400).json({ error: "CLAIM_CODE_REQUIRED" });
+    }
+
+    const client = await pool.connect();
     try {
-        // 1. Check if code is valid/unused (You can have a table for valid codes)
-        // 2. Update person_birthright
-        await pool.query(
-            `UPDATE person_birthright 
-             SET storage_quota_mb = storage_quota_mb + 100 
-             WHERE person_id = $1`, 
-            [userId]
+        await client.query('BEGIN');
+
+        // 1. Check if code exists and is still valid
+        const codeCheck = await client.query(
+            `SELECT id, value_mb FROM allotment_codes 
+             WHERE code = $1 AND is_redeemed = FALSE`, 
+            [allotmentCode.trim()]
         );
 
-        res.json({ success: true, message: "BIRTHRIGHT_EXPANDED: 100MB_ADDED" });
+        if (codeCheck.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({ error: "INVALID_OR_EXPIRED_CODE" });
+        }
+
+        const grantAmount = codeCheck.rows[0].value_mb;
+
+        // 2. Update member_birthright (Standardizing table names)
+        const updateRes = await client.query(
+            `UPDATE member_birthright 
+             SET storage_quota_mb = storage_quota_mb + $1, 
+                 updated_at = NOW() 
+             WHERE person_id = $2`, 
+            [grantAmount, userId]
+        );
+
+        if (updateRes.rowCount === 0) {
+            // Fallback: If the user doesn't have a birthright row yet, create it
+            await client.query(
+                `INSERT INTO member_birthright (person_id, storage_quota_mb, provisioning_status) 
+                 VALUES ($1, $2, 'PROVISIONED')`,
+                [userId, grantAmount]
+            );
+        }
+
+        // 3. Burn the code so it cannot be used again
+        await client.query(
+            `UPDATE allotment_codes 
+             SET is_redeemed = TRUE, redeemed_by = $1, redeemed_at = NOW() 
+             WHERE code = $2`,
+            [userId, allotmentCode]
+        );
+
+        await client.query('COMMIT');
+
+        console.log(`[BIRTHRIGHT] Success: User ${userId} claimed ${grantAmount}MB via ${allotmentCode}`);
+        
+        res.json({ 
+            success: true, 
+            message: `BIRTHRIGHT_EXPANDED: ${grantAmount}MB_ADDED`,
+            code: allotmentCode 
+        });
+
     } catch (err) {
+        await client.query('ROLLBACK');
+        console.error("CLAIM_FAULT:", err.message);
         res.status(500).json({ error: "DATABASE_SYNC_FAILED" });
+    } finally {
+        client.release();
+    }
+});
+
+// Dual-mode: Registry Index + Global Search
+app.get('/api/vpu/registry/members', async (req, res) => {
+    try {
+        const q = req.query.q?.trim();
+
+        const query = `
+            SELECT 
+                p.id, 
+                p.official_name, 
+                p.sovereign_name, 
+                p.identity_state,
+                r.name as rank_name, 
+                r.code as rank_abbr, 
+                r.rank_order as clearance,
+                mb.storage_quota_mb
+            FROM person p
+            LEFT JOIN person_rank pr ON p.id = pr.person_id
+            LEFT JOIN rank r ON pr.rank_id = r.id
+            LEFT JOIN member_birthright mb ON p.id = mb.person_id
+            ORDER BY r.rank_order DESC NULLS LAST;
+        `;
+
+        const searchClause = q
+            ? `
+                WHERE 
+                    p.official_name ILIKE $1 OR
+                    p.sovereign_name ILIKE $1 OR
+                    p.identity_state ILIKE $1 OR
+                    r.name ILIKE $1 OR
+                    r.abbr ILIKE $1
+              `
+            : '';
+
+        const orderClause = `
+            ORDER BY r.clearance DESC NULLS LAST, p.id ASC
+        `;
+
+        const baseSelect = `
+            SELECT p.id, p.official_name, p.sovereign_name, p.identity_state,
+                   r.name as rank_name, r.code as rank_abbr, r.rank_order as clearance
+            FROM person p
+            LEFT JOIN person_rank pr ON p.id = pr.person_id
+            LEFT JOIN rank r ON pr.rank_id = r.id `;
+
+        const sql = baseSelect + searchClause + orderClause;
+
+        const params = q ? [`%${q}%`] : [];
+
+        const result = await pool.query(sql, params);
+
+        // Normalize → IdentityManager schema
+        const members = result.rows.map(row => ({
+            security: { 
+                uid: row.id.toString().padStart(4, '0'),
+                rank: row.rank_name || 'SEED',
+                abbr: row.rank_abbr || 'S',
+                clearance: row.clearance || 1
+            },
+            personal: { 
+                officialName: row.official_name || "UNREGISTERED",
+                sovereignName: row.sovereign_name || "PENDING_BIND"
+            },
+            status: { 
+                remarks: row.identity_state || 'ACTIVE'
+            }
+        }));
+
+        // Genesis fallback
+        if (members.length === 0 && !q) {
+            return res.json([{
+                security: { uid: "0000", rank: "ARCHON", abbr: "ARCH", clearance: 10 },
+                personal: { officialName: "Michael Audi", sovereignName: "ARCHANTILANI" },
+                status: { remarks: "GENESIS_CORE" }
+            }]);
+        }
+
+        res.json(members);
+
+    } catch (err) {
+        console.error("!!! PG_UPLINK_CRASH:", err);
+        res.status(500).json({ error: "GENESIS_SYNC_FAILED" });
+    }
+});
+
+/**
+ * GENESIS PROVISIONING ENDPOINT
+ * This generates the "Physical" assets for the Universal Handshake.
+ */
+/**
+ * PRODUCTION GENESIS PROVISIONING
+ * Strictly linked to the PostgreSQL 'person' table.
+ */
+app.get('/api/vpu/provision-bundle', async (req, res) => {
+    try {
+        // 1. Fetch the absolute Genesis identity from the DB.
+        // We look for ID 1 (The Root) or the specific Founder name.
+        const result = await pool.query(
+            "SELECT official_name, sovereign_name, id FROM person WHERE id = 1 OR official_name = 'Michael Audi' LIMIT 1"
+        );
+
+        // 2. STRICTURE: If the database is empty or the record is missing, FAIL.
+        if (result.rows.length === 0) {
+            console.error("!!! PROVISION_BLOCK: No Genesis Identity found in 'person' table.");
+            return res.status(403).json({ 
+                error: "IDENTITY_NOT_FOUND", 
+                message: "Genesis record missing from Sovereign Database." 
+            });
+        }
+
+        const identity = result.rows[0];
+
+        // 3. Create the Real Payload
+        const payload = {
+            org: "THEALCOHESION_SOVEREIGN",
+            uid: identity.id.toString().padStart(4, '0'),
+            founder: identity.official_name,
+            sovereign: identity.sovereign_name,
+            build: "1.2.8_GENESIS",
+            iat: Math.floor(Date.now() / 1000),
+            iss: "VPU_BRIDGE_ROOT"
+        };
+
+        // 4. Sign with your environment's Private Secret
+        const signedCert = jwt.sign(payload, process.env.JWT_SECRET, { algorithm: 'HS256' });
+
+        // 5. Generate Hardware-Linked Hash
+        const buildHash = require('crypto')
+            .createHash('sha256')
+            .update(signedCert + identity.id)
+            .digest('hex')
+            .toUpperCase();
+
+        res.json({
+            certificate: `-----BEGIN VPU SOVEREIGN CERTIFICATE-----\n${signedCert}\n-----END VPU SOVEREIGN CERTIFICATE-----`,
+            build_hash: buildHash,
+            hw_id: `VPU-NODE-${identity.id}-${Date.now().toString(36).toUpperCase()}`
+        });
+
+    } catch (err) {
+        console.error("!!! GENESIS_PROVISION_CRASH:", err);
+        res.status(500).json({ error: "DATABASE_UPLINK_CRASH" });
     }
 });
 

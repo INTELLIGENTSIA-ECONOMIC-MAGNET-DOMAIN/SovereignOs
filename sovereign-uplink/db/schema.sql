@@ -74,6 +74,7 @@ DROP TABLE IF EXISTS security_session CASCADE;
 DROP TABLE IF EXISTS birthright_claim CASCADE;
 DROP TABLE IF EXISTS offline_provision_packet CASCADE;
 DROP TABLE IF EXISTS operating_system CASCADE;
+DROP TABLE IF EXISTS allotment_codes CASCADE;
 
 -- ===========================
 -- Core tables
@@ -1136,6 +1137,38 @@ CREATE TABLE member_birthright (
 CREATE INDEX idx_member_birthright_person_id ON member_birthright(person_id);
 ALTER TABLE member_birthright ADD CONSTRAINT unique_person_birthright UNIQUE (person_id);
 
+
+CREATE TABLE allotment_codes (
+    id SERIAL PRIMARY KEY,
+    code VARCHAR(50) UNIQUE NOT NULL,
+    value_mb INTEGER DEFAULT 100,
+    is_redeemed BOOLEAN DEFAULT FALSE,
+    redeemed_by UUID REFERENCES person(id),
+    redeemed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+-- 1. Create the Function that performs the insertion
+CREATE OR REPLACE FUNCTION initialize_member_birthright()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO member_birthright (person_id, storage_quota_mb, provisioning_status)
+    VALUES (NEW.id, 100, 'PENDING');
+    
+    RAISE NOTICE 'GENESIS_BIRTHRIGHT_PROVISIONED: ID % initialized with 100MB.', NEW.id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 2. Bind the Function to the 'person' table
+DROP TRIGGER IF EXISTS trg_genesis_birthright ON person;
+CREATE TRIGGER trg_genesis_birthright
+AFTER INSERT ON person
+FOR EACH ROW
+EXECUTE FUNCTION initialize_member_birthright();
+
+
 -- ===========================
 -- SECURITY DEVICES
 -- ===========================
@@ -1254,3 +1287,20 @@ INSERT INTO mentorship_structure_type (code, name, description) VALUES
 -- =========================================
 -- END OF FULL THEALCOHESION SCHEMA
 -- =========================================
+
+-- --- GOVERNANCE & AUTHORITY BINDING ---
+-- Granting the Bridge User access to the Public Schema
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO archanti;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO archanti;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO archanti;
+
+-- Ensure future tables created in this schema also inherit these permissions
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO archanti;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO archanti;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO archanti;
+
+-- Confirming Authority
+DO $$ 
+BEGIN 
+    RAISE NOTICE 'SOVEREIGN_AUTHORITY: Privileges successfully bound to archanti.';
+END $$;

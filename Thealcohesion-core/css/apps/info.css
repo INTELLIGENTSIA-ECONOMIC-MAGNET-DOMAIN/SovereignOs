@@ -1,0 +1,19 @@
+.info-wrapper { display: flex; height: 100%; background: #0a0a0a; color: #eee; font-family: monospace; }
+.info-sidebar { width: 220px; border-right: 1px solid #222; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+.info-brand { font-weight: 900; color: #a855f7; letter-spacing: 2px; font-size: 14px; border-bottom: 2px solid #a855f7; padding-bottom: 10px; }
+.info-nav { display: flex; flex-direction: column; gap: 5px; }
+.i-tab { background: none; border: 1px solid transparent; color: #666; text-align: left; padding: 10px; cursor: pointer; font-size: 11px; transition: 0.3s; }
+.i-tab:hover { color: #fff; background: #111; }
+.i-tab.active { color: #a855f7; border-left: 2px solid #a855f7; background: rgba(168, 85, 247, 0.05); }
+
+.info-content { flex: 1; padding: 30px; overflow-y: auto; line-height: 1.6; }
+.info-pane h2 { color: #a855f7; margin-bottom: 20px; font-size: 18px; border-bottom: 1px solid #222; }
+.manifesto-card { background: #111; padding: 15px; margin-bottom: 15px; border: 1px solid #222; }
+.manifesto-card h3 { color: #00ff41; font-size: 12px; margin-bottom: 5px; }
+.article { margin-bottom: 20px; }
+.article span { color: #ffd700; font-weight: bold; display: block; margin-bottom: 5px; }
+.hidden { display: none; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+th { text-align: left; color: #666; padding: 10px; border-bottom: 1px solid #333; }
+td { padding: 10px; border-bottom: 1px solid #111; }

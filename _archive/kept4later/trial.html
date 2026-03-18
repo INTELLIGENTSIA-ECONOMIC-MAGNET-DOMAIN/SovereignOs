@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Thealcohesion VPU Loading</title>
+  <style>
+    /* 1. NEW BACKGROUND ANIMATION STYLES */
+    .bg-animation-wrap {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: -1; /* Keeps it behind your UI */
+      background: #000; /* Final color */
+      overflow: hidden;
+    }
+
+    /* Common sweep settings applied to all layers */
+    .sweep {
+      position: absolute;
+      inset: 0;
+      clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%);
+      animation: sweepContinuous 6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+        
+    /* Leads the transition */
+    .bg-blue {
+      background: #174d25;
+    }
+
+    /* Follows the blue */
+    .bg-purple {
+      background: #441274;
+      animation-delay: 0.8s;
+    }
+
+    /* Follows purple to turn screen black */
+    .bg-black-sweep {
+      background: #000;
+      animation-delay: 1.6s;
+    }
+
+    @keyframes sweepContinuous {
+      0% {
+        clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%);
+      }
+      50% {
+        clip-path: polygon(30% 0, 100% 0, 100% 100%, 70% 100%);
+      }
+      100% {
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+      }
+    }
+
+    /* EXISTING STYLES BELOW - UNCHANGED */
+    #fadeOverlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: #000;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 9999;
+      transition: opacity 2s ease;
+    }
+
+    #fadeOverlay.active {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    #preloadFrame {
+      display: none;
+      width: 0;
+      height: 0;
+      border: none;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: #000;
+      color: #6A1B9A;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      text-align: center;
+      overflow: hidden;
+    }
+
+    .container {
+      width: 90%;
+      max-width: 500px;
+      opacity: 0;
+      transform: scale(0.95);
+      animation: containerFadeIn 1s ease forwards;
+      z-index: 10;
+    }
+
+    @keyframes containerFadeIn {
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .logo {
+      max-width: 200px;
+      margin-bottom: 1rem;
+      animation: logoFloatRotate 4s ease-in-out infinite;
+    }
+
+    @keyframes logoFloatRotate {
+      0%, 100% { transform: translateY(0) rotate(0deg); }
+      50% { transform: translateY(-10px) rotate(3deg); }
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.8rem;
+      color: #bb86fc;
+    }
+
+    h2 {
+      font-size: 1.2rem;
+      font-weight: normal;
+      font-style: italic;
+      border-bottom: 3px solid #6A1B9A;
+      padding-bottom: 0.5rem;
+      color: #bb86fc;
+    }
+
+    .progress-container {
+      margin: 20px 0;
+    }
+
+    .progress-bar {
+      background-color: #6A1B9A;
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+      height: 30px;
+      box-shadow: 0 0 8px #6A1B9A99 inset;
+    }
+
+    .progress-fill {
+      background-color: #2E7D32;
+      width: 0%;
+      height: 100%;
+      transition: width 0.2s linear;
+      animation: progressGlow 2s ease-in-out infinite alternate;
+    }
+
+    @keyframes progressGlow {
+      0% { box-shadow: 0 0 6px #2E7D32aa; }
+      100% { box-shadow: 0 0 15px #2E7D32ff; }
+    }
+
+    .progress-bar span {
+      position: absolute;
+      left: 50%;
+      top: 0;
+      transform: translateX(-50%);
+      color: #2196F3;
+      font-weight: bold;
+      line-height: 30px;
+      user-select: none;
+    }
+
+    .status-text {
+      font-family: 'Courier New', Courier, monospace;
+      background-color: #0a0a0a;
+      color: #00ff00;
+      padding: 12px 15px;
+      border-radius: 5px;
+      margin-top: 15px;
+      min-height: 80px;
+      text-align: left;
+      white-space: pre-wrap;
+      box-shadow: inset 0 0 10px #00ff00aa;
+      position: relative;
+      overflow-wrap: break-word;
+      user-select: text;
+    }
+
+    .status-text::after {
+      content: '_';
+      animation: blink 0.7s steps(1) infinite;
+      position: absolute;
+      right: 15px;
+      bottom: 12px;
+      color: #00ff00;
+    }
+
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="bg-animation-wrap">
+    <div class="sweep bg-blue"></div>
+    <div class="sweep bg-purple"></div>
+    <div class="sweep bg-black-sweep"></div>
+  </div>
+
+  <audio id="successSound" src="thealcohesionvoice.mp3" preload="auto"></audio>
+  <audio id="voiceSound" src="thealcohesionvoice.mp3" preload="auto"></audio>
+
+  <div class="container" id="loaderContainer">
+    <img src="/logo.png" alt="Thealcohesion Logo" class="logo"/>
+    <h1>Thealcohesion VPU</h1>
+    <h2>Hobnob city of cosmopolitan</h2>
+
+    <div class="progress-container">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+        <span id="progressText">0%</span>
+      </div>
+    </div>
+
+    <div class="status-text" id="statusText">Initializing Thealcohesion framework...</div>
+  </div>
+
+  <iframe id="preloadFrame" src="https://www.vpu.world"></iframe>
+  <div id="fadeOverlay"></div>
+
+  <script>
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    const statusText = document.getElementById('statusText');
+    const container = document.getElementById('loaderContainer');
+    const successSound = document.getElementById('successSound');
+    const voiceSound = document.getElementById('voiceSound');
+    const fadeOverlay = document.getElementById('fadeOverlay');
+
+    const steps = [
+      { percent: 0, text: ">> Loading Thealcohesion on Thealcohesion VPU framework...\n" },
+      { percent: 50, text: ">> Loading formations, platforms and services..." },
+      { percent: 65, text: ">> Initiating handshakes:\n   - Formations handshake completed" },
+      { percent: 79, text: ">> Initiating handshakes:\n   - Platforms handshake completed" },
+      { percent: 87, text: ">> Initiating handshakes:\n   - Services handshake completed" },
+      { percent: 95, text: ">> Process execution successful.\n>> Welcome to Thealcohesion VPU system" },
+      { percent: 100, text: ">> Launching........" }
+    ];
+
+    let startTime = null;
+    const totalDuration = 10000;
+    let currentStepIndex = -1;
+
+    function animateProgress(timestamp) {
+      if (!startTime) startTime = timestamp;
+      const elapsed = timestamp - startTime;
+      const progressPercent = Math.min((elapsed / totalDuration) * 100, 100);
+
+      progressFill.style.width = `${progressPercent}%`;
+      progressText.textContent = `${Math.floor(progressPercent)}%`;
+
+      for (let i = steps.length - 1; i >= 0; i--) {
+        if (progressPercent >= steps[i].percent) {
+          if (currentStepIndex !== i) {
+            currentStepIndex = i;
+            statusText.innerHTML = steps[i].text.replace(/\n/g, '<br>');
+          }
+          break;
+        }
+      }
+
+      if (progressPercent < 100) {
+        requestAnimationFrame(animateProgress);
+      } else {
+        successSound.play();
+        voiceSound.play();
+        
+        // Final transition logic
+        setTimeout(() => {
+          fadeOverlay.classList.add('active');
+          container.style.opacity = "0";
+          container.style.transition = "opacity 1s ease";
+        }, 1000);
+
+        setTimeout(() => {
+          window.location.href = "https://www.vpu.world";
+        }, 3000);
+      }
+    }
+
+    requestAnimationFrame(animateProgress);
+  </script>
+</body>
+</html>

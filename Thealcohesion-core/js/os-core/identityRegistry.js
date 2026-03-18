@@ -4,73 +4,6 @@
  * MANAGED_BY: MEMBERSHIP_DEVOPS // SECURE_UPLINK_ENABLED
  */
 
-const MEMBER_LIST = [
-    {
-        userName: "ARCHAN_SUPREME",
-        officialName: "Michael Audi", 
-        sovereignName: "Archantilani Ntilanima Archantima", 
-        actionCenter: "AC_NAIROBI_01", 
-        tlca: "AC_NAIROBI_01_TLCA_01",
-        rank: "ARCHON",
-        position: "SUPREME_SAGE",
-        specialRecognition: ["BLD", "TRT", "PTP", "ORIGIN_FOUNDER"],
-        awards: ["EARLY_INVESTOR", "100MB_PIONEER"],
-        joinedThealcohesion: "2023-01-01",
-        joinedAC: "2023-06-15",
-        joinedTLC: "2024-01-10",
-        rankDate: "2025-12-26",
-        remarks: "On Duty", 
-        titles: ["Sage AMA Humble"],
-        demographics: { dob: "1990-01-01", gender: "MALE" },
-        documentId: "ID-774900X",
-        contact: { email: "archon@sovereign.os", phone: "+254700000000" },
-        location: { country: "KENYA", sector: "SECTOR_7_CENTRAL" },
-        media: { 
-            profile: "https://api.dicebear.com/7.x/bottts/svg?seed=Archon&backgroundColor=050505", 
-            cover: "https://images.unsplash.com/photo-1639322537228-f710d846310a?q=80&w=1200",
-            idFront: "https://images.unsplash.com/photo-1590424753858-394a12a5ecba?q=80&w=400",
-            idBack: "https://images.unsplash.com/photo-1590424753858-394a12a5ecba?q=80&w=400"
-        },
-        security: {
-            uid: "NAT-7749-X2",
-            ipBinding: "192.168.0.104",
-            deviceFingerprint: "CORE_WORKSTATION",
-            status: "ACTIVE",
-            since: "2025-12-26",
-            rank: "Chief In General Senior",
-            abbr: "CG.SNR.",
-            clearance: 10,
-            isFrozen: false
-        }
-    },
-    {
-        userName: "GENESIS_NODE",
-        officialName: "Jane Smith",
-        sovereignName: "POH_SÕLM", 
-        demographics: { dob: "1988-05-12", gender: "FEMALE" },
-        documentId: "PASS-E9921K",
-        contact: { email: "node1@sovereign.os", phone: "+3725000000" },
-        location: { country: "ESTONIA", sector: "SECTOR_1_GLOBAL" },
-        media: { 
-            profile: "https://api.dicebear.com/7.x/bottts/svg?seed=Node&backgroundColor=050505", 
-            cover: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=1200",
-            idFront: "https://images.unsplash.com/photo-1554126807-6b10f6f6692a?q=80&w=400",
-            idBack: "https://images.unsplash.com/photo-1554126807-6b10f6f6692a?q=80&w=400"
-        },
-        security: {
-            uid: "INV-8821-K9",
-            ipBinding: "10.0.0.5",
-            deviceFingerprint: "FIELD_UPLINK_PRO",
-            status: "ENCRYPTED",
-            since: "2025-12-26",
-            clearance: 4,
-            rank: "INITIAL_INVESTOR",
-            isFrozen: false
-        },
-        awards: ["CORE_INVESTOR", "CORE_CONTRIBUTOR"]
-    }
-];
-
     const RANKS = {
         "CG.SNR.": "Chief In General Senior",
         "CAO": "Chief Authenticating Officer",
@@ -100,6 +33,8 @@ export class IdentityManager {
     constructor(container, apiBridge) {
         this.container = container;
         this.bridge = apiBridge;
+        this.members = []; // Start empty
+        this.isLoading = true;
         this.selectedMember = null;
         this.isRegistering = false;
         this.vaultUnlocked = false;
@@ -135,8 +70,28 @@ export class IdentityManager {
     }
 
     async init() {
+        await this.syncWithCore();
         this.render();
     }
+
+    async syncWithCore() {
+    try {
+        const url = this.searchQuery
+            ? `http://localhost:3000/api/vpu/registry/members?q=${encodeURIComponent(this.searchQuery)}`
+            : `http://localhost:3000/api/vpu/registry/members`;
+        const response = await fetch(url);
+        const data = await response.json();
+        console.log("GENESIS_DATA_RECEIVED:", data); // Debug here
+        
+        // Add validation to ensure data is an array
+        this.members = Array.isArray(data) ? data : []; 
+        this.isLoading = false;
+        this.render();
+    } catch (error) {
+        console.error("SYNC_ERROR:", error);
+        this.addLog("CRITICAL: UPLINK_FAILURE", "security");
+    }
+}
 
     isIpBlacklisted(ip) {
     return this.ipBlacklist.includes(ip);
@@ -159,7 +114,7 @@ export class IdentityManager {
     }
 
     bestowRecognition(memberUid, recognitionCode) {
-        const member = MEMBER_LIST.find(m => m.security.uid === memberUid);
+        const member = this.members.find(m => m.security.uid === memberUid);
         if (member) {
             if (!member.specialRecognition.includes(recognitionCode)) {
                 member.specialRecognition.push(recognitionCode);
@@ -170,15 +125,15 @@ export class IdentityManager {
     }
 
     updateMember(uid, updates) {
-    const idx = MEMBER_LIST.findIndex(m => m.security.uid === uid);
+    const idx = this.members.findIndex(m => m.security.uid === uid);
     if (idx !== -1) {
         // 1. UPDATE MASTER LIST
-        MEMBER_LIST[idx] = { ...MEMBER_LIST[idx], ...updates };
+        this.members[idx] = { ...this.members[idx], ...updates, __dirty: true};
         
         // 2. BIOME SYNCHRONIZATION (The Connection)
         // Propagate changes to the map immediately (AC/TLC moves or Frozen status)
         if (window.os && window.os.activeProcesses['biome']) {
-            window.os.activeProcesses['biome'].syncRegistryData(MEMBER_LIST);
+            window.os.activeProcesses['biome'].syncRegistryData(this.members);
             this.addLog(`UPLINK_SYNC: Data for ${uid} propagated to Biome.`, 'system');
         }
 
@@ -195,7 +150,7 @@ export class IdentityManager {
                 alert(`SIGNAL_SEVERED: Identity ${uid} has been frozen and logged out.`);
             } else {
                 // Update the current view's reference if they weren't frozen
-                this.selectedMember = MEMBER_LIST[idx];
+                this.selectedMember = this.members[idx];
             }
         }
 
@@ -567,7 +522,7 @@ resetFilters() {
 }
 
 renderDirectory() {
-    const filteredMembers = MEMBER_LIST.filter(m => {
+    const filteredMembers = this.members.filter(m => {
         const query = this.searchQuery.toLowerCase();
         const matchSearch = m.sovereignName.toLowerCase().includes(query) || m.security.uid.toLowerCase().includes(query);
         const matchRank = this.filters.rank === "ALL" || m.security.abbr === this.filters.rank;
@@ -590,7 +545,7 @@ renderDirectory() {
             <div class="registry-header" style="border-left: 4px solid var(--id-gold); padding-left: 20px; margin-bottom: 40px;">
                 <h1 style="color:var(--id-gold); margin:0; letter-spacing:8px; font-size: 1.2rem;">REGISTRY_INDEX</h1>
                 <div style="font-size: 9px; color: #444; letter-spacing: 2px; margin-top: 5px;">
-                    ACTIVE_UPLINKS: ${filteredMembers.length} // TOTAL_DATABASE: ${MEMBER_LIST.length}
+                    ACTIVE_UPLINKS: ${filteredMembers.length} // TOTAL_DATABASE: ${this.members.length}
                 </div>
             </div>
             <div style="display:grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr; gap:10px; margin-bottom:30px;">
@@ -626,7 +581,7 @@ renderDirectory() {
                 ${filteredMembers.map(m => {
                 const isFrozen = m.isFrozen || false;
                 return `
-                    <div class="device-entry member-row" data-idx="${MEMBER_LIST.indexOf(m)}" 
+                    <div class="device-entry member-row" data-idx="${this.members.indexOf(m)}" 
                         style="cursor:pointer; display: flex; justify-content: space-between; align-items: center; 
                         opacity: ${isFrozen ? '0.3' : '1'}; 
                         filter: ${isFrozen ? 'grayscale(1)' : 'none'};
@@ -707,7 +662,7 @@ renderDirectory() {
         const uid = formData.get('uid');
 
         // SECURITY CHECK: Block if the identity is flagged as FROZEN
-        const existingMember = MEMBER_LIST.find(m => m.security.uid === uid);
+        const existingMember = this.members.find(m => m.security.uid === uid);
         if (existingMember && existingMember.isFrozen) {
             this.addLog(`ACCESS_DENIED: Identity ${uid} is currently FROZEN.`, 'error');
             alert("CRITICAL_ERROR: Your sovereign signal has been locked by DEVOPS. Access denied.");
@@ -958,7 +913,7 @@ renderHoneyPot() {
     triggerMassLockdown() {
         this.addLog("CRITICAL: INITIATING_GLOBAL_LOCKDOWN", "security");
         
-        MEMBER_LIST.forEach(m => {
+        this.members.forEach(m => {
             // Protect clearance level 10 (Archan Supreme)
             if (m.security.clearance < 10) {
                 m.isFrozen = true;
@@ -994,7 +949,7 @@ renderHoneyPot() {
      * Authorizes a pending registration via cryptographic signature.
      */
     vouchForCitizen(tempUid, voucherUid) {
-    const member = MEMBER_LIST.find(m => m.security.uid === tempUid);
+    const member = this.members.find(m => m.security.uid === tempUid);
     
     if (member && member.isFrozen) {
         this.addLog(`VOUCH_FAILED: Cannot approve FROZEN_SIGNAL ${uid}`, 'error');
@@ -1012,7 +967,7 @@ renderHoneyPot() {
         citizen.security.vouchedBy = voucherUid;
         
         // 3. PUSH TO MAIN LIST (This is where the "Saving" happens)
-        MEMBER_LIST.push(citizen);
+        this.members.push(citizen);
         
         // 4. Remove from quarantine
         this.pendingApprovals.splice(index, 1);
@@ -1044,7 +999,7 @@ async exportRegistryManifest() {
 
     try {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const dataStr = JSON.stringify(MEMBER_LIST, null, 4);
+        const dataStr = JSON.stringify(this.members, null, 4);
         const blob = new Blob([dataStr], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         
@@ -1065,7 +1020,7 @@ async exportRegistryManifest() {
 
 //To complete registration
 finalizeCitizenUplink(memberUid, country, ip) {
-    const member = MEMBER_LIST.find(m => m.security.uid === memberUid);
+    const member = this.members.find(m => m.security.uid === memberUid);
     
     if (member) {
         // Update the member record
@@ -1299,7 +1254,7 @@ getPhysicalLocation(lat, lng) {
 
 // Comprehensive Rank & Demographic Telemetry
 getNodeTelemetry(nodeId) {
-    const natives = MEMBER_LIST.filter(m => m.actionCenter === nodeId || m.tlca === nodeId);
+    const natives = this.members.filter(m => m.actionCenter === nodeId || m.tlca === nodeId);
     
     // Explicit Rank Audit (Required Ranks)
     const schema = ["CG.SNR.", "CAO", "AO", "SAAO", "JAAO", "SM", "JM", "M", "S"];
@@ -1396,7 +1351,7 @@ getNodeTelemetry(nodeId) {
     this.container.querySelectorAll('.member-row').forEach(row => {
         row.onclick = () => {
             const idx = row.dataset.idx;
-            this.selectedMember = MEMBER_LIST[idx];
+            this.selectedMember = this.members[idx];
             this.vaultUnlocked = false; 
             this.render();
         };

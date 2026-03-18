@@ -1,0 +1,8 @@
+{
+  "id": "vfs",
+  "name": "vfs",
+  "version": "0.1.0",
+  "permissions": [],
+  "entry": "index.js",
+  "signature": null
+}

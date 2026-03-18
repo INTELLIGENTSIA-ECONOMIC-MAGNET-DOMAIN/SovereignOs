@@ -150,10 +150,13 @@
             <h1 class="pulsing-text">> IDENTITY_PENDING</h1>
             
             <div class="allotment-info" style="margin: 20px 0; padding: 15px; border-left: 3px solid #00ff88; text-align: left; background: rgba(0,0,0,0.3);">
-                <div style="font-size: 0.6rem; color: #00ff88; letter-spacing: 2px;">[ VERIFICATION_CRITERIA ]</div>
-                <div style="font-size: 0.8rem; color: #fff; margin-top: 5px;">
+                <div style="font-size: 0.6rem; color: #00ff88; letter-spacing: 2px;">[ INITIAL_PROVISIONING_DEED ]</div>
+                <div style="font-size: 0.8rem; color: #fff; margin-top: 5px; font-family: 'Sovereign-Mono', monospace;">
                     PROTOCOL: NATIVE_VERIFICATION <br>
-                    NATIVE: NATIVE REGISTRATION CONFIRMATION
+                    NATIVE: NATIVE REGISTRATION CONFIRMATION:<br>
+                    ASSET_TYPE: VFS_STORAGE_CELL <br>
+                    BIRTHRIGHT_ALLOTMENT: <span style="color: #00ff88;">100MB [RESERVED]</span> <br>
+                    PROVISION_STATUS: <span id="provision-status" style="color: #888;">SCANNIG...</span>
                 </div>
             </div>
 
@@ -224,42 +227,55 @@
 async function checkAllotmentStatus(isManual = false) {
     const hw_id = localStorage.getItem('hw_id');
     if (!hw_id) {
-        if (isManual) showSovModal("ERROR", "No Hardware ID detected. Restarting Ingress.", "#ff4444");
+        if (isManual) showSovModal("ERROR", "No Hardware ID detected.", "#ff4444");
         return false;
     }
 
     try {
+        // Using 127.0.0.1 to avoid local 'localhost' resolution delays
         const response = await fetch(`http://localhost:3000/api/spacs/check-status?hw_id=${hw_id}`);
         
-        // Handle the 404 you were getting
         if (response.status === 404) {
-            if (isManual) {
-                showSovModal("REGISTRY_ERROR", "Identity not found in database. Please ensure your registration was successful.", "#ff4444");
-            }
+            if (isManual) showSovModal("REGISTRY_ERROR", "Identity not found. Restarting Ingress.", "#ff4444");
             return false;
         }
 
         const data = await response.json();
+        const provEl = document.getElementById('provision-status');
 
-        // 1. Success: identity_state is 'verified'
-        if (data.status === 'APPROVED') {
+        // Update Provision Status UI
+        if (provEl) {
+            provEl.innerText = data.provision_status || "AWAITING_ADMIN";
+            if (data.provision_status === 'PROVISIONED') provEl.style.color = "#00ff88";
+        }
+
+        // --- THE REDIRECT TRIGGER ---
+        // We trigger redirect IF the admin has assigned keys, regardless of the 'status' string
+        if (data.membership_no && data.license_key) {
+            
+            // 1. Secure the credentials for Form B
+            localStorage.setItem('temp_membership_no', data.membership_no);
+            localStorage.setItem('temp_license_key', data.license_key);
+
+            // 2. Visual Feedback
             const log = document.getElementById('system-log');
             const msg = document.createElement('div');
             msg.style.color = "#00ff88";
-            msg.innerText = "> IDENTITY_STATE: VERIFIED. REDIRECTING...";
+            msg.innerText = `> KEYS_FOUND [${data.membership_no}]. REDIRECTING...`;
             log.prepend(msg);
 
+            // 3. Execute Transition
             setTimeout(() => {
-                window.location.href = './download.html';
-            }, 2000);
+                window.location.href = './download.html#provision';
+            }, 1500);
             return true;
         } 
         
-        // 2. Pending: identity_state is 'unverified'
-        if (isManual && data.status === 'UNVERIFIED') { 
+        // Handling the "Still Waiting" state
+        if (isManual) { 
             showSovModal(
-                "ALLOTMENT_IN_PROGRESS", 
-                "Your identity is currently [UNVERIFIED]. Please remain patient while EPOS and Investors finalize the initial allotment.", 
+                "IDENTITY_PENDING", 
+                "Credentials not yet issued. Please wait for Admin approval.", 
                 "#888"
             );
         }
@@ -267,7 +283,7 @@ async function checkAllotmentStatus(isManual = false) {
 
     } catch (err) {
         console.error("Uplink jitter:", err);
-        if (isManual) showSovModal("UPLINK_ERROR", "Could not reach the Sovereign Core. Check if server is running on port 3000.", "#ff4444");
+        if (isManual) showSovModal("UPLINK_ERROR", "Core Offline (Check Port 3000).", "#ff4444");
         return false;
     }
 }

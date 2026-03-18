@@ -128,3 +128,22 @@ identity-state= VERIFIED
 Provisioning = PROVISIONED
 Pasword_harsh and user_name is not empty
 Go to OS CORE
+
+CLAIM BIRTHDAY FRONT END REMEBEDR TO IMPLEMENT IT
+// Example Frontend Call
+const claimBirthright = async (code) => {
+    const response = await fetch('/api/vpu/allotment/claim', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${kernel.sessionKey}`,
+            'X-Machine-ID': kernel.hwSig
+        },
+        body: JSON.stringify({ allotmentCode: code })
+    });
+    
+    const result = await response.json();
+    if (result.success) {
+        alert("Storage Quota Updated: +100MB");
+    }
+};

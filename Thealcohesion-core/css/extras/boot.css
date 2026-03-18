@@ -1,33 +1,120 @@
-/* Boot styles for the application */
-/* --- SPLASH SCREEN STYLES --- */
+/* --- ROOT CONTAINER --- */
 #os-splash {
-    background: #000;
-    color: white;
-    font-family: 'Inter', sans-serif;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
     position: fixed;
     inset: 0;
-    z-index: 20000;
-}   
-#splash-logo-container {
-    position: relative;
-    width: 200px;
-    height: 200px;
-    margin-bottom: 20px;
+    background: #000;
+    z-index: 30000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
 }
-#vpu-logo {
-    width: 100%;
-    opacity: 0.5;
-}
-#vpu-glow {
+
+/* --- BACKGROUND ANIMATION (From "Fresh" Styles) --- */
+.bg-animation-wrap {
     position: absolute;
     inset: 0;
-    background: #a445ff;
-    filter: blur(40px);
-    opacity: 0.3;
-    border-radius: 50%;
+    z-index: -1;
 }
-/* Additional boot styles can be added here */
+
+.sweep {
+    position: absolute;
+    inset: 0;
+    clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%);
+    animation: sweepContinuous 6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.bg-blue { background: #174d25; }
+.bg-purple { background: #441274; animation-delay: 0.8s; }
+.bg-black-sweep { background: #000; animation-delay: 1.6s; }
+
+@keyframes sweepContinuous {
+    0% { clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%); }
+    50% { clip-path: polygon(30% 0, 100% 0, 100% 100%, 70% 100%); }
+    100% { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
+}
+
+/* --- UI COMPONENTS --- */
+.container {
+    width: 90%;
+    max-width: 500px;
+    text-align: center;
+    z-index: 10;
+}
+
+.logo {
+    max-width: 200px;
+    margin-bottom: 1rem;
+    animation: logoFloatRotate 4s ease-in-out infinite;
+    border: 1px solid green;
+    background-color: greenyellow;
+    border-radius: 20px;
+}
+
+@keyframes logoFloatRotate {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-10px) rotate(3deg); }
+}
+
+h1 { color: #bb86fc; margin: 0; font-size: 1.8rem; }
+h2 { color: #bb86fc; font-size: 1.2rem; font-style: italic; border-bottom: 3px solid #6A1B9A; padding-bottom: 0.5rem; }
+
+.progress-bar {
+    background-color: #111;
+    border: 1px solid #333;
+    border-radius: 10px;
+    height: 30px;
+    position: relative;
+    overflow: hidden;
+    margin: 20px 0;
+}
+
+.progress-fill {
+    background-color: #a445ff;
+    width: 0%;
+    height: 100%;
+    box-shadow: 0 0 15px #a445ff;
+    transition: width 0.1s linear;
+}
+
+#progressText {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+.status-text {
+  font-family: 'Courier New', Courier, monospace;
+  background-color: #0a0a0a;
+  color: #00ff00;
+  padding: 12px 15px;
+  border-radius: 5px;
+  margin-top: 15px;
+  min-height: 80px; 
+  text-align: left;
+  white-space: pre-wrap;
+  box-shadow: inset 0 0 10px #00ff00aa; /* Inner terminal glow */
+  position: relative;
+  overflow-wrap: break-word;
+  user-select: text;
+  font-size: 13px;
+  border: 1px solid #00ff0033;
+}
+
+/* Blinking Cursor at the end of the text */
+.status-text::after {
+  content: '_';
+  animation: cursorBlink 0.7s steps(1) infinite;
+  color: #00ff00;
+  margin-left: 2px;
+}
+
+@keyframes cursorBlink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}

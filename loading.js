@@ -167,7 +167,7 @@ function initInterestForm() {
                     
                     if (data.success) {
                         localStorage.setItem('sov_identity_confirmed', 'true');
-                        localStorage.setItem('vpu_hw_id', hwFingerprint);
+                        localStorage.setItem('hw_id', hwFingerprint);
                         closeAllModals(); 
                         showSovModal("REGISTRY_SUCCESS", "Hardware Bound. Redirecting...", "#00ff88");
                         setTimeout(() => { window.location.href = './waiting-approval.html'; }, 2500);
@@ -211,7 +211,7 @@ function initProvisionForm() {
             phone: document.getElementById('m-phone').value.trim(),
             phone_code: document.getElementById('m-phone-code')?.value || "+254", // Match saved code
             country: document.getElementById('m-country')?.value || "KE",
-            hw_id: localStorage.getItem('vpu_hw_id'), // Ensure this matches the full hash
+            hw_id: localStorage.getItem('hw_id'), // Ensure this matches the full hash
             arch: detectProvisionManagement()
         };
 
@@ -225,7 +225,9 @@ function initProvisionForm() {
 
             if (data.success) {
                 closeAllModals();
-                showSovModal("PROVISION_GRANTED", "Identity verified. Initializing download sequence.");
+                showSovModal("PROVISION_GRANTED", "Identity verified. 100MB Birthright Allotment secured Initializing download sequence.");
+                // Store the allotment locally for UI consistency
+                localStorage.setItem('sov_allotment', data.allotment_mb);
                 if (typeof startProvisioningSequence === 'function') {
                 // FIXED: Using the exact keys from your payload object above
                 startProvisioningSequence(
@@ -265,7 +267,7 @@ function initDistributionButtons() {
 
             // 1. Capture Hardware & Architecture
             const hwFingerprint = await generateLocalFingerprint(); 
-            localStorage.setItem('vpu_hw_id', hwFingerprint);
+            localStorage.setItem('hw_id', hwFingerprint);
             
             const selectedClass = [...button.classList].find(cls => osMapping[cls]);
             const architecture = osMapping[selectedClass] || getArchitecture();

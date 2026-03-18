@@ -24,7 +24,9 @@ export class FilesApp {
     constructor(container, kernel) {
         this.container = container;
         this.kernel = kernel;
+        this.vfs = kernel.vfs; // Link the global VFS
         this.activeCategory = 'Personal';
+        this.cwd = `/users/${kernel.user.identity}`; // Set base directory
         this.activeSub = null;
         this.undoStack = [];; // for UNDO
         window.app = this; // CRITICAL: Makes app.download() etc work from HTML strings
@@ -68,44 +70,51 @@ export class FilesApp {
         return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
     }
 
-    async saveNewFile(name, content, category) {
-    try {
-        // 1. Integrity Check: Prevent empty/duplicate manifests
-        if (!name) throw new Error("VOID_IDENTIFIER");
-
-        // 2. VFS Write: Use MFS directly
-        await MFS.saveFile({ name, content, category }); 
-
-        // 3. Dispatch via Kernel: Decoupled communication
-        this.kernel.emit('FILE_CREATED', {
-            name: name,
-            category: category,
-            timestamp: new Date().toISOString(),
-            clearance: 'RESTRICTED'
-        });
-
-        // 4. Atomic UI Refresh: Don't reload everything, just the folder
-        await this.navigateTo(category);
         
-    } catch (err) {
-        this.kernel.notify(`MANIFEST_ERR: ${err.message}`, "high");
-    }
-}
+        
+
+        async saveNewFile(name, content, category) {
+            try {
+                // 1. Integrity Check: Prevent empty/duplicate manifests
+                if (!name) throw new Error("VOID_IDENTIFIER");
+
+                // Resolve the full VFS path
+                const path = `${this.cwd}/${category}/${name}`.replace(/\/+/g, '/');
+                
+                // 2. Write through the VFS (this triggers Quota and Permissions)
+                await this.vfs.write(path, name, content, category); 
+                
+                // 3. Dispatch via Kernel: Decoupled communication
+                this.kernel.emit('FILE_CREATED', {
+                    name: name,
+                    category: category,
+                    timestamp: new Date().toISOString(),
+                    clearance: 'RESTRICTED'
+                });
+
+                // 4. Atomic UI Refresh: Don't reload everything, just the folder
+                await this.navigateTo(category);
+            } catch (err) {
+                this.kernel.notify(`VFS_WRITE_ERR: ${err.message}`, "high");
+            }
+        }
+
 
    async navigateTo(cat, sub = null) {
     this.activeCategory = cat;
     this.activeSub = sub;
     const list = document.getElementById('file-mesh-list');
     const breadcrumb = document.getElementById('breadcrumb');
+    const targetPath = sub ? `${this.cwd}/${cat}/${sub}` : `${this.cwd}/${cat}`;
 
     // Safety Check: Prevent crash if DOM isn't ready
-        if (!list || !breadcrumb) return;
+    const entries = await this.vfs.list(targetPath);
     
     //QUOTA TA
     // 1. Calculate Usage for Personal Sector
-    const usageMB = (MFS.manifest.personalUsage / (1024 * 1024)).toFixed(2);
+    const { driver } = this.vfs.mounts.resolve(this.cwd);
+    const usageMB = (driver.size / (1024 * 1024)).toFixed(2);
     const quotaLimit = 100.00; // Native Birthright
-    const quotaPct = Math.min((usageMB / quotaLimit) * 100, 100);
     
     // 2. Build Tactical Breadcrumb
     const pathHtml = `<span class="path-root">DEVICE_STORAGE</span> / ${cat.toUpperCase()} ${sub ? ` / ${sub}` : ''}`;
@@ -899,22 +908,35 @@ renderAnalytics() {
     // --- TACTICAL ACTIONS ---
 
     async download(fileName) {
-        // Find file in manifest
-        const file = MFS.manifest.files.find(f => f.name === fileName);
-        if (!file) return;
+    // 1. Construct the absolute VFS path based on current directory
+    const fullPath = `${this.cwd}/${this.activeCategory}/${fileName}`.replace(/\/+/g, '/');
+    
+    console.log(`PULLING_LIVE_DATA: ${fullPath}...`);
 
-        console.log(`PULLING_DATA: ${fileName}...`);
+    try {
+        // 2. Read directly from VFS
+        const content = await this.vfs.read(fullPath);
         
-        // Create a virtual blob to simulate a real download
-        const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' });
+        // 3. Prepare the binary blob for the browser
+        const blob = new Blob(
+            [typeof content === 'string' ? content : JSON.stringify(content, null, 2)], 
+            { type: 'text/plain' }
+        );
+        
+        // 4. Trigger Native Download Sequence
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = fileName;
         a.click();
+        window.URL.revokeObjectURL(url);
         
         this.notify(`DATA_PULL_COMPLETE: ${fileName}`);
+    } catch (e) {
+        // Catch permission or read errors from the kernel
+        this.notify(`READ_FAULT: ${e.message || "DATA_UNREACHABLE"}`, "high");
     }
+}
 
     copyPath(path) {
         navigator.clipboard.writeText(path).then(() => {
@@ -922,88 +944,48 @@ renderAnalytics() {
         });
     }
 
-    wipe(fileName) {
-    if (!confirm(`CRITICAL: MOVE ${fileName.toUpperCase()} TO RECYCLE_BIN?`)) return;
+ async wipe(fileName) {
+    const source = `${this.cwd}/${this.activeCategory}/${fileName}`.replace(/\/+/g, '/');
+    const recycleDir = `${this.cwd}/Recycle`.replace(/\/+/g, '/');
+    const destination = `${recycleDir}/${fileName}`;
 
-    const idx = MFS.manifest.files.findIndex(f => f.name === fileName);
-    if (idx === -1) return;
+    if (!confirm(`MOVE ${fileName.toUpperCase()} TO RECYCLE_BIN?`)) return;
 
-    const file = MFS.manifest.files[idx];
-
-    // Preserve original location
-    file._recycleMeta = {
-        originalCategory: file.category,
-        originalPath: file.path,
-        deletedAt: Date.now(),
-        hash: file.hash            // 🧬 snapshot
-    };
-
-    // Remove from active files
-    MFS.manifest.files.splice(idx, 1);
-
-    // Restore quota immediately
-    if (file.category === 'Personal') {
-        MFS.manifest.personalUsage -= file.sizeBytes;
-        if (MFS.manifest.personalUsage < 0) {
-            MFS.manifest.personalUsage = 0;
+    try {
+        // Ensure the Recycle directory exists
+        if (!(await this.vfs.exists(recycleDir))) {
+            await this.vfs.write(recycleDir, {}); // Create folder if missing
         }
+
+        // Execute the VFS move
+        await this.vfs.move(source, destination);
+
+        this.notify(`OBJECT_RELOCATED: ${fileName} -> RECYCLE_BIN`, "normal");
+        
+        // Refresh the current view
+        await this.navigateTo(this.activeCategory, this.activeSub);
+    } catch (e) {
+        this.notify(`RELOCATION_FAILURE: ${e.message}`, "high");
     }
-
-    //Encrypt on wipe
-    (async () => {
-    const key = await this.getDeviceKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-
-    const encoded = new TextEncoder().encode(JSON.stringify(file.content || ""));
-    const cryptoKey = await crypto.subtle.importKey(
-        "raw", key, "AES-GCM", false, ["encrypt"]
-    );
-
-    const encrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        cryptoKey,
-        encoded
-    );
-
-    file._encryptedPayload = {
-        data: Array.from(new Uint8Array(encrypted)),
-        iv: Array.from(iv)
-    };
-
-    file.content = null; // remove plaintext
-    })();
-
-    // Push to recycle bin
-   // Set expiry for 30 days from now
-    file.expiryAt = new Date(Date.now() + 30 * 86400000).toISOString();
-
-    // Push to recycle bin
-    MFS.manifest.recycleBin.push(file);
-    this.undoStack.push(file);
+}   
 
 
-    // Track for undo
-    this.lastDeleted = file;
+async move(sourcePath, destinationPath) {
+    try {
+        // 1. Extract the data from the source
+        const content = await this.read(sourcePath);
 
-    this.notify(`MOVED_TO_RECYCLE_BIN: ${fileName}`, "high");
+        // 2. Write the data to the new location
+        // This automatically handles encryption/decryption if crossing drivers
+        await this.write(destinationPath, content);
 
-    //Tracking hash
-    MFS.manifest.deleteLedger.push({
-    name: file.name,
-    category: file.category,
-    path: file.path,
-    hash: file.hash,
-    deletedAt: new Date().toISOString(),
-    actor: this.kernel.user?.identity || "SYSTEM"
-});
+        // 3. Purge the original entry once the transfer is verified
+        await this.delete(sourcePath);
 
-    // Stay in same folder
-    this.navigateTo(this.activeCategory, this.activeSub);
-
-    // Auto-expire undo after 10s
-    setTimeout(() => {
-        if (this.lastDeleted === file) this.lastDeleted = null;
-    }, 10000);
+        return true;
+    } catch (e) {
+        throw new Error(`VFS_MOVE_FAULT: ${e.message}`);
+    }
 }
 
 
@@ -1029,50 +1011,17 @@ undoDelete() {
     this.navigateTo(file.category, file.path.split('/')[1]);
 }
 
-restoreFromRecycle(index) {
-    const files = MFS.manifest.recycleBin;
-    const file = files[index];
-    if (!file) return;
+async restoreFromRecycle(fileName, targetCategory) {
+    const source = `${this.cwd}/Recycle/${fileName}`.replace(/\/+/g, '/');
+    const destination = `${this.cwd}/${targetCategory}/${fileName}`.replace(/\/+/g, '/');
 
-    // Integrity check
-    if (file._recycleMeta && file.hash !== file._recycleMeta.hash) {
-        this.notify("INTEGRITY_FAIL: HASH_MISMATCH", "high");
-        return;
+    try {
+        await this.vfs.move(source, destination);
+        this.notify(`RESTORE_COMPLETE: ${fileName} returned to ${targetCategory}`);
+        await this.navigateTo('Recycle');
+    } catch (e) {
+        this.notify(`RESTORE_FAULT: ${e.message}`, "high");
     }
-
-    // Restore original category/path
-    if (file._recycleMeta) {
-        file.category = file._recycleMeta.originalCategory;
-        file.path = file._recycleMeta.originalPath;
-    }
-    delete file._recycleMeta;
-
-    // Restore quota
-    if (file.category === 'Personal') MFS.manifest.personalUsage += file.sizeBytes;
-
-    // Move to active files
-    files.splice(index, 1);
-    MFS.manifest.files.push(file);
-
-    // Decrypt payload if needed
-    (async () => {
-        if (file._encryptedPayload) {
-            const key = await this.getDeviceKey();
-            const cryptoKey = await crypto.subtle.importKey(
-                "raw", key, "AES-GCM", false, ["decrypt"]
-            );
-            const decrypted = await crypto.subtle.decrypt(
-                { name: "AES-GCM", iv: new Uint8Array(file._encryptedPayload.iv) },
-                cryptoKey,
-                new Uint8Array(file._encryptedPayload.data)
-            );
-            file.content = JSON.parse(new TextDecoder().decode(decrypted));
-            delete file._encryptedPayload;
-        }
-    })();
-
-    this.notify(`RESTORED: ${file.name}`);
-    this.navigateTo(file.category);
 }
 
 

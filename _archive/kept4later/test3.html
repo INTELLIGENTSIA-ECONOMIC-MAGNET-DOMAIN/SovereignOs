@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign | Architectural Depth</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+    
+    <style>
+        :root {
+            --bg: #020202;
+            --accent: #00ffa3;
+            --glass: rgba(255, 255, 255, 0.03);
+        }
+
+        body, html {
+            margin: 0; padding: 0;
+            background: var(--bg);
+            color: white;
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+        }
+
+        /* 1. The 3D Canvas Background */
+        #canvas-container {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100vh;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        /* 2. Content Overlay */
+        .section {
+            position: relative;
+            z-index: 2;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            padding: 0 10%;
+        }
+
+        .content-box {
+            max-width: 500px;
+            background: var(--glass);
+            backdrop-filter: blur(10px);
+            padding: 40px;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 { font-size: 4rem; margin-bottom: 20px; line-height: 1; }
+        p { color: #888; font-size: 1.2rem; }
+
+        .accent-text { color: var(--accent); font-family: monospace; }
+
+        /* 3. The Allotment Blueprint Section */
+        .blueprint-section {
+            justify-content: flex-end;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <section class="section">
+        <div class="content-box">
+            <span class="accent-text">PHASE 01: FOUNDATION</span>
+            <h1>Sovereign Infrastructure</h1>
+            <p>Inspired by Prozilla, built for autonomy. We build our digital house on independent soil.</p>
+        </div>
+    </section>
+
+    <section class="section blueprint-section">
+        <div class="content-box">
+            <span class="accent-text">PHASE 02: ALLOTMENT</span>
+            <h1>Investor Ledger</h1>
+            <p>Every beam in this structure is accounted for. EPOS systems integrated into the very walls of the code.</p>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="content-box">
+            <span class="accent-text">PHASE 03: LIVE</span>
+            <h1>Total Ownership</h1>
+            <p>A house you own, on a web you control.</p>
+        </div>
+    </section>
+
+    <script>
+        gsap.registerPlugin(ScrollTrigger);
+
+        // --- THREE.JS 3D HOUSE STRUCTURE SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // Create a "House" Wireframe Structure
+        const houseGroup = new THREE.Group();
+
+        // 1. Base (The Foundation)
+        const baseGeo = new THREE.BoxGeometry(4, 0.5, 4);
+        const wireMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffa3, wireframe: true });
+        const base = new THREE.Mesh(baseGeo, wireMaterial);
+        houseGroup.add(base);
+
+        // 2. Main Walls
+        const wallsGeo = new THREE.BoxGeometry(3.5, 3, 3.5);
+        const walls = new THREE.Mesh(wallsGeo, wireMaterial);
+        walls.position.y = 1.75;
+        houseGroup.add(walls);
+
+        // 3. Roof (Pyramid Style)
+        const roofGeo = new THREE.ConeGeometry(3, 2, 4);
+        const roof = new THREE.Mesh(roofGeo, wireMaterial);
+        roof.position.y = 4.25;
+        roof.rotation.y = Math.PI / 4;
+        houseGroup.add(roof);
+
+        scene.add(houseGroup);
+        camera.position.z = 8;
+        camera.position.y = 2;
+
+        // --- GSAP SCROLL ANIMATIONS ---
+        
+        // Rotate the "House" as you scroll
+        gsap.to(houseGroup.rotation, {
+            y: Math.PI * 2,
+            scrollTrigger: {
+                trigger: "body",
+                start: "top top",
+                end: "bottom bottom",
+                scrub: 1
+            }
+        });
+
+        // Move the house side to side based on section
+        gsap.to(houseGroup.position, {
+            x: -3,
+            scrollTrigger: {
+                trigger: ".blueprint-section",
+                start: "top bottom",
+                end: "top center",
+                scrub: 1
+            }
+        });
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            // Constant subtle float
+            houseGroup.position.y += Math.sin(Date.now() * 0.002) * 0.005;
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

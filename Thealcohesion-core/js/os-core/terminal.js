@@ -23,6 +23,9 @@ export class TerminalApp {
         this.isTyping = false;
         this.liveInterval = null;
 
+        // Start user in their own enclave
+        this.cwd = `/users/${this.api.identity}`; 
+
         // Use the master registry as the source of truth
         this.appRegistry = registry;
 
@@ -127,19 +130,48 @@ export class TerminalApp {
 
         switch (cleanCmd) {
             case 'ls':
-                await this.typeWrite("Directory: /home\n  - readme.txt\n  - documents/\n    - investors.txt");
+                const files = await this.api.vfs.list(this.cwd);
+                if (files.length === 0) {
+                    await this.typeWrite("Directory empty.");
+                } else {
+                    // Directories get a distinct color (blueish), files are standard green
+                    files.forEach(f => this.print(`  ${f}`, f.includes('.') ? "#00ff41" : "#3498db"));
+                }
+                break;
+
+            case 'cd':
+                const targetPath = fullPath(args[0] || `/users/${this.api.identity}`);
+                if (await this.api.vfs.exists(targetPath)) {
+                    this.cwd = targetPath;
+                    this.print(`MOVED_TO: ${this.cwd}`, "#a445ff");
+                } else {
+                    throw new Error("PATH_NOT_FOUND");
+                }
                 break;
 
             case 'cat':
-                if (!arg) return this.typeWrite("Usage: cat [filename]");
-                const path = arg.includes('/') ? `home/${arg}` : `home/${arg}`;
-                try {
-                    // Using the Bridge VFS and Key
-                    const content = await this.api.vfs.read(path, this.api.sessionKey);
-                    await this.typeWrite(content || "ERR: File empty or not found.");
-                } catch(e) {
-                    await this.typeWrite("ERR: VFS_DECRYPTION_FAILED");
-                }
+                if (!args[0]) throw new Error("USAGE: cat [filename]");
+                const content = await this.api.vfs.read(fullPath(args[0]));
+                this.print("--- ENCLAVE_BUFFER_START ---", "#a445ff");
+                this.print(typeof content === 'object' ? JSON.stringify(content, null, 2) : content);
+                this.print("--- ENCLAVE_BUFFER_END ---", "#a445ff");
+                break;
+
+            case 'mkdir':
+            case 'touch':
+                if (!args[0]) throw new Error(`USAGE: ${cleanCmd} [name]`);
+                await this.api.vfs.write(fullPath(args[0]), cleanCmd === 'mkdir' ? {} : "");
+                await this.typeWrite(`[VFS]: Object ${args[0]} materialized in enclave.`);
+                break;
+
+            case 'rm':
+                if (!args[0]) throw new Error("USAGE: rm [target]");
+                await this.api.vfs.delete(fullPath(args[0]));
+                await this.typeWrite(`[VFS]: Object ${args[0]} purged from sector.`);
+                break;
+
+            case 'clear':
+                this.output.innerHTML = "";
                 break;
 
             case 'exit':
@@ -179,14 +211,48 @@ export class TerminalApp {
                     "SOVEREIGN VPU TERMINAL"
                 ].join('\n');
                 
-                this.print(logoA, "#a445ff"); // Use the new print method
-                
-                const ramUsed = (Math.random() * 4 + 2).toFixed(1);
-                const cpuLoad = Math.floor(Math.random() * 15 + 5);
-                const stats = `\nUSER: ${this.api.identity}\nKERNEL: TLC_1.2.9\nFORMATION: ADMIN_CORE\nUPTIME: 100%\n\n[SYSTEM TELEMETRY]\nOS:       Sovereign OS v1.2.8\nCPU:      Alcohesion Quantum-Thread [${cpuLoad}%]\nMEMORY:   ${ramUsed}GB / 32GB [|||---------]\n`;
-                
-                await this.typeWrite(stats); // Stream the stats for effect
-                break;
+                this.print(logoA, "#a445ff");
+
+                try {
+                    // 1. Get real Uptime from ProcFS
+                    const uptime = await this.api.vfs.read("/system/proc/uptime");
+                    
+                    // 2. Get real Disk Usage from the User's Enclave
+                    // Note: This assumes your driver exposes a .size property or you can query it
+                    const userPath = `/users/${this.api.identity}`;
+                    const { driver } = this.api.vfs.mounts.resolve(userPath);
+                    
+                    const usedBytes = driver.size || 0;
+                    const usedMB = (usedBytes / 1024 / 1024).toFixed(2);
+                    const quotaMB = 100; // Your MAX_DISK_SIZE
+                    const percent = Math.min(Math.round((usedMB / quotaMB) * 100), 100);
+                    
+                    // 3. Create the visual progress bar
+                    const barLength = 10;
+                    const filled = Math.round(percent / 10);
+                    const progressBar = `[${"█".repeat(filled)}${"-".repeat(barLength - filled)}]`;
+
+                    const stats = [
+                        ` `,
+                        `USER:     ${this.api.identity}`,
+                        `KERNEL:   VPU-OS_v1.2.9_STABLE`,
+                        `UPTIME:   ${uptime}`,
+                        `SHELL:    SovereignShell v1.0`,
+                        ` `,
+                        `[ENCLAVE TELEMETRY]`,
+                        `MOUNT:    ${userPath}`,
+                        `STORAGE:  ${usedMB}MB / ${quotaMB}MB ${progressBar}`,
+                        `STATUS:   ${percent > 90 ? 'CRITICAL_QUOTA' : 'OPTIMAL'}`,
+                        `IDENTITY: ${this.api.sessionKey ? 'ENCRYPTED_AND_BOUND' : 'UNSECURED'}`,
+                        ` `
+                    ].join('\n');
+
+                    await this.typeWrite(stats);
+                    } catch (e) {
+                        console.error("NEOFETCH_FAILURE:", e);
+                        this.print("ERR: Unable to fetch system telemetry.", "#ff4444");
+                    }
+            break;
 
             case 'vfs-tree':
                 const tree = [
@@ -207,7 +273,7 @@ export class TerminalApp {
                 break;
 
             case 'help':
-                await this.typeWrite("DIRECTIVES:\n  > search     (App Registry)\n  > open [id]  (Launch App)\n  > time       (Temporal Pulse)\n  > status     (System Integrity)\n  > network    (Node Scan)\n  > allotment  (Genesis Data)\n  > neofetch   (Hardware Info)\n  > matrix     (Toggle Reality)\n  > clear      (Flush Buffer)");
+                await this.typeWrite("DIRECTIVES:\n  > search     (App Registry)\n  > open [id]  (Launch App)\n  > time       (Temporal Pulse)\n  > status     (System Integrity)\n  > network    (Node Scan)\n  > allotment  (Genesis Data)\n  > neofetch   (Hardware Info)\n  > matrix     (Toggle Reality)\n  > clear      (Flush Buffer) > VFS_DIRECTIVES:\n  ls, cd, cat, touch, mkdir, rm, clear\n\nSYSTEM_DIRECTIVES:\n  search, open, status, neofetch, matrix, exit");
                 break;
 
             case 'status':
@@ -238,10 +304,6 @@ export class TerminalApp {
 
             case 'clear':
                 this.output.innerHTML = '';
-                break;
-
-            case 'ls':
-                await this.listDirectory();
                 break;
 
             case 'sudo':
