@@ -327,7 +327,7 @@ export class ProcessManager {
         get APP_ROUTES() {
             return {
                 'terminal': async (container) => {
-                    const m = await import('./terminal.js');
+                    const m = await import('../apps/terminal/index.js');
                     
                     // THE BYPASS: Providing the internal signature required by TerminalApp
                     const apiBridge = {
@@ -525,7 +525,7 @@ export class ProcessManager {
             },
     
             'identity': async (container) => {
-                const { IdentityManager } = await import('./identityRegistry.js');
+                const { IdentityManager } = await import('../apps/identity-registry/index.js');
                 
                 const apiBridge = {
                     signature: 'SOVEREIGN_CORE_V1',
@@ -537,15 +537,15 @@ export class ProcessManager {
                 };
     
                 const instance = new IdentityManager(container, apiBridge);
-                instance.render(); // Renders the Citizen Folio
-    
+                if (instance.init) await instance.init();
+                else instance.render();
                 this.activeProcesses = this.activeProcesses || {};
                 this.activeProcesses['identity'] = instance;
                 return instance;
             },
     
             'biome': async (container) => {
-                const { SovereignBiome } = await import('./sovereignBiome.js');
+                const { Biome } = await import('../apps/biome/index.js');
                 
                 const apiBridge = {
                     signature: 'SOVEREIGN_CORE_V1',
@@ -559,7 +559,7 @@ export class ProcessManager {
                     close: () => this.closeApp('biome')
                 };
     
-                const instance = new SovereignBiome(container, apiBridge);
+                const instance = new Biome(container, apiBridge);
                 instance.render(); // Renders the Cellular Grid
     
                 this.activeProcesses = this.activeProcesses || {};

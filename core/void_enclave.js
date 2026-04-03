@@ -1,82 +1,168 @@
 /**
- * void_enclave.js - SOVEREIGN ISOLATION STATE (v1.0)
- * Role: Non-progressive neutral containment.
- * Characteristics: No escalation, continuous observation, zero trust.
+ * void_enclave.js - SOVEREIGN ISOLATION STATE (v2.2)
+ * Feature: Identity Purge Countdown & Continuous Observation
+ * Logic: Hardwipe Enclave Keys on session dissolution.
  */
 
 export class VoidEnclave {
     constructor(container) {
         this.container = container;
-        this.integrityStatus = "NEUTRALIZED";
+        this.purgeTimer = null;
+        this.obsTimer = null;
+        this.secondsRemaining = 60; 
     }
 
-    /**
-     * MATERIALIZE VOID
-     * Wipes the existing UI and renders the isolation environment.
-     * @param {string} reason - The specific violation or state that triggered isolation.
-     */
-    materialize(reason = "UNBOUND_MACHINE_OBSERVATION") {
-        console.warn("SYSTEM: Transitioning to VOID_ENCLAVE. Identity escalation paused.");
+    materialize(reason = "IDENTITY_MISMATCH") {
+        console.error("» VOID_ENCLAVE: Continuous observation initialized.");
 
-        // Clear all previous UI/logic bindings
-        this.container.innerHTML = "";
-        
-        // Render the Neutral Isolation UI
         const voidHTML = `
-            <div class="void-surface" style="
-                position: fixed; inset: 0; 
-                background: #000; color: #333; 
+            <div id="void-surface" style="
+                position: fixed; inset: 0; background: #000; color: #333; 
                 display: flex; flex-direction: column; align-items: center; justify-content: center;
-                font-family: 'Courier New', monospace; z-index: 99999;
-                overflow: hidden;">
+                font-family: 'Courier New', monospace; z-index: 999999; overflow: hidden;">
                 
-                <div style="position: absolute; inset: 0; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02)); background-size: 100% 2px, 3px 100%; pointer-events: none;"></div>
+                <div style="position: absolute; inset: 0; background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.2) 50%); background-size: 100% 4px; pointer-events: none;"></div>
 
-                <div class="void-core" style="border: 1px solid #111; padding: 60px; text-align: center; position: relative;">
-                    <h1 style="letter-spacing: 15px; margin: 0; font-size: 24px; color: #222;">VOID_ENCLAVE</h1>
+                <div class="void-core" style="border: 1px solid #1a0000; padding: 60px; text-align: center; background: rgba(5,0,0,0.95); position: relative; box-shadow: 0 0 50px rgba(255,0,0,0.05);">
                     
-                    <div style="margin: 30px 0; height: 1px; width: 100%; background: #111;"></div>
+                    <div id="void-glitch-title" style="letter-spacing: 12px; font-size: 24px; color: #500; text-shadow: 0 0 10px #300;">VOID_ENCLAVE</div>
                     
-                    <p style="font-size: 12px; color: #444; max-width: 400px; line-height: 1.6;">
-                        [STATE]: ${reason}<br>
-                        [MODE]: CONTINUOUS_OBSERVATION<br>
-                        [TRUST]: ZERO_THRESHOLD
-                    </p>
+                    <div id="purge-clock" style="margin: 20px 0; font-size: 48px; color: #200; font-weight: bold; letter-spacing: 5px; transition: color 0.5s;">
+                        00:60
+                    </div>
 
-                    <div id="void-telemetry" style="margin-top: 40px; font-size: 9px; color: #1a1a1a;">
-                        Awaiting sovereign re-binding...
+                    <div style="font-size: 9px; color: #444; margin-bottom: 30px; letter-spacing: 2px;">
+                        [STATE]: CONTINUOUS_OBSERVATION_ACTIVE
+                    </div>
+
+                    <div style="text-align: left; display: inline-block; font-size: 11px; line-height: 2; border-left: 1px solid #200; padding-left: 20px;">
+                        <span style="color: #600;">[STATUS]:</span> ISOLATED<br>
+                        <span style="color: #600;">[VIOLATION]:</span> ${reason.toUpperCase()}<br>
+                        <span style="color: #600;">[ENFORCEMENT]:</span> ZERO_TRUST_THRESHOLD
+                    </div>
+
+                    <div id="void-telemetry" style="margin-top: 30px; font-size: 10px; color: #1a1a1a; min-height: 15px;">
+                        SCANNING_INGRESS_ANOMALY...
+                    </div>
+
+                    <div style="margin-top: 40px;">
+                        <button id="rebind-btn" style="
+                            background: transparent; border: 1px solid #200; 
+                            color: #200; padding: 12px 24px; cursor: pointer;
+                            font-family: inherit; font-size: 10px; transition: 0.3s; text-transform: uppercase;">
+                            Interrupt Purge & Rebind
+                        </button>
                     </div>
                 </div>
 
-                <div style="position: absolute; bottom: 20px; font-size: 10px; opacity: 0.3;">
-                    SOVEREIGN_VPU_ISOLATION_PROTOCOL_v.2025.12.26
+                <div style="position: absolute; bottom: 20px; font-size: 10px; opacity: 0.2; letter-spacing: 5px;">
+                    SOVEREIGN_VPU_ENCLAVE_SYSTEM_2025_12_26
                 </div>
             </div>
         `;
 
         this.container.innerHTML = voidHTML;
-        this.startBackgroundObservation();
+        this.startPurgeCountdown();
+        this.startObservationTelemetry();
+        this.attachRecoveryLogic();
     }
 
-    /**
-     * CONTINUOUS OBSERVATION
-     * Simulates the 'Sniffer' role even while in Void state.
-     */
-    startBackgroundObservation() {
+    startObservationTelemetry() {
         const telemetry = document.getElementById('void-telemetry');
-        const pulses = [
-            "SCANNING_ENVIRONMENT...",
+        const logs = [
+            "SCANNING_HARDWARE_INTEGRITY...",
+            "OBSERVING_INGRESS_PATTERNS...",
             "HEARTBEAT_STABLE...",
-            "NO_ESCALATION_DETECTED...",
-            "OBSERVING_INGRESS_PATTERNS..."
+            "MAPPING_VIOLATION_VECTORS...",
+            "IDENTITY_ESCALATION_PAUSED...",
+            "REPLICATING_VOLATILE_STATE..."
         ];
         
         let i = 0;
-        setInterval(() => {
+        this.obsTimer = setInterval(() => {
             if (telemetry) {
-                telemetry.innerText = pulses[i % pulses.length];
+                telemetry.innerText = logs[i % logs.length];
                 i++;
             }
-        }, 4000);
+        }, 3500);
+    }
+
+    startPurgeCountdown() {
+        const clock = document.getElementById('purge-clock');
+        
+        this.purgeTimer = setInterval(() => {
+            this.secondsRemaining--;
+            
+            if (clock) {
+                const secs = this.secondsRemaining.toString().padStart(2, '0');
+                clock.innerText = `00:${secs}`;
+                
+                if (this.secondsRemaining <= 10) {
+                    clock.style.color = "#f00";
+                    clock.style.textShadow = "0 0 15px rgba(255,0,0,0.5)";
+                    clock.style.transform = `translateX(${Math.random() * 4 - 2}px)`;
+                }
+            }
+
+            if (this.secondsRemaining <= 0) this.executePurge();
+        }, 1000);
+    }
+
+    executePurge() {
+        clearInterval(this.purgeTimer);
+        clearInterval(this.obsTimer);
+        
+        console.warn("» VOID_CRITICAL: PURGE_SEQUENCE_COMPLETE. WIPING_ENCLAVE_KEY.");
+
+        const core = document.querySelector('.void-core');
+        if (core) {
+            core.style.borderColor = "#f00";
+            core.innerHTML = `
+                <div style="color:#f00; font-size: 14px; letter-spacing: 2px; padding: 20px;">
+                    SESSION_PURGED<br>
+                    <span style="font-size: 9px; color: #400; display: block; margin-top: 10px;">
+                        ENCLAVE_KEY_DELETED // MEMORY_WIPED // REBOOTING
+                    </span>
+                </div>
+            `;
+        }
+
+        // --- CRYPTOGRAPHIC WIPE ---
+        if (window.kernel) {
+            window.kernel.sessionKey = null;
+            window.kernel.user = null;
+        }
+
+        // --- PERSISTENCE WIPE ---
+        localStorage.removeItem('vpu_session_token');
+        localStorage.removeItem('vpu_deadlock_flag');
+        sessionStorage.clear(); 
+
+        setTimeout(() => location.reload(), 2500);
+    }
+
+    attachRecoveryLogic() {
+        const btn = document.getElementById('rebind-btn');
+        if (!btn) return;
+
+        btn.onmouseover = () => {
+            btn.style.borderColor = "#500";
+            btn.style.color = "#500";
+        };
+        btn.onmouseout = () => {
+            btn.style.borderColor = "#200";
+            btn.style.color = "#200";
+        };
+
+        btn.onclick = () => {
+            clearInterval(this.purgeTimer);
+            clearInterval(this.obsTimer);
+            if (window.kernel && window.kernel.auth) {
+                document.getElementById('void-surface').remove();
+                window.kernel.auth.renderMountButton();
+            } else {
+                location.reload();
+            }
+        };
     }
 }

@@ -74,6 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initPhoneValidation();
     initInterestForm();
     initProvisionForm();   
+    lockProvisioningUI();
 });
 
 
@@ -190,6 +191,40 @@ function initInterestForm() {
     }; // End onsubmit
 } // End initInterestForm
 
+// --- INDEXEDDB MANIFEST STORAGE ---
+// --- INDEXEDDB: SOVEREIGN STORAGE ENGINE ---
+const DB_NAME = "SOVEREIGN_CORE_DB";
+const STORE_NAME = "manifest_store";
+
+function openDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, 1);
+
+        request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME, { keyPath: "id" });
+            }
+        };
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function saveManifestToDB(manifest) {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+
+    store.put({
+        id: "vpu_manifest",
+        data: manifest
+    });
+
+    return tx.complete;
+}
+
 // --- 7. FORM B: PROVISIONING BRIDGE ---
 function initProvisionForm() {
     const form = document.getElementById('provision-form');
@@ -230,12 +265,8 @@ function initProvisionForm() {
                 localStorage.setItem('sov_allotment', data.allotment_mb);
                 if (typeof startProvisioningSequence === 'function') {
                 // FIXED: Using the exact keys from your payload object above
-                startProvisioningSequence(
-                    payload.official_name,
-                    payload.license_key,
-                    payload.arch, 
-                    data.shell_url
-                );}
+            await handleFullProvisioning(payload.official_name, data, payload.arch);    
+            }
             } else {
                 showSovModal("AUTH_FAILED", data.error || "Credentials rejected.", "#ff4444");
                 btn.disabled = false;
@@ -248,6 +279,100 @@ function initProvisionForm() {
     };
 }
 
+/**
+ * FORM B: PHYSICAL PROVISIONING (100MB FOLDER & MANIFEST CREATION)
+ */
+/**
+ * UNIFIED PROVISIONING ENGINE
+ * Saves manifest to IndexedDB AND generates physical downloads (.bin & .vpu)
+ */
+async function handleFullProvisioning(ownerName, bundle, arch) {
+    const overlay = document.getElementById('provisioning-overlay');
+    const logBox = document.getElementById('log-box');
+    if (overlay) overlay.style.display = 'flex';
+
+    const addLog = (text) => {
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.innerHTML = `> ${text}`;
+        if (logBox) {
+            logBox.appendChild(line);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    };
+
+    addLog(`<span style="color:#a855f7;">INITIALIZING SOVEREIGN PROVISIONING...</span>`);
+
+    // 1. DATA ASSEMBLY
+    const systemIdentity = document.getElementById('m-member-no').value.trim().toUpperCase();
+    const vpuManifest = {
+        vfs_version: "1.2.8",
+        owner: systemIdentity,
+        real_name: ownerName,
+        hardware_binding: localStorage.getItem('hw_id'),
+        allotment_mb: bundle.allotment_mb || 100,
+        created_at: new Date().toISOString(),
+        sector_id: `SEC-${Math.random().toString(36).toUpperCase().substring(2, 10)}`,
+        integrity_hash: bundle.build_hash || "GENESIS_HASH_001"
+    };
+
+    // 2. PERSISTENCE (IndexedDB)
+    try {
+        addLog(`Securing Vault Manifest in local enclave...`);
+        await saveManifestToDB(vpuManifest);
+        localStorage.setItem('vpu_manifest_present', 'true');
+        localStorage.setItem('vpu_sector_id', vpuManifest.sector_id);
+        addLog(`<span style="color:#00ff88;">[SUCCESS]: Manifest persisted to IndexedDB.</span>`);
+    } catch (err) {
+        addLog(`<span style="color:#ff4444;">[ERROR]: Database persistence failed.</span>`);
+    }
+
+    // 3. GENERATE SOVEREIGN DRIVE (.BIN)
+    addLog(`Generating 100MB Sovereign Drive (Physical Media)...`);
+    const ALLOTMENT_SIZE = 100 * 1024 * 1024; 
+    const driveBuffer = new Uint8Array(ALLOTMENT_SIZE);
+    const encoder = new TextEncoder();
+    
+    // Tagging manifest for auth.js scanning
+    const taggedManifest = `---VPU_MANIFEST_START---\n${JSON.stringify(vpuManifest)}\n---VPU_MANIFEST_END---`;
+    const manifestBytes = encoder.encode(taggedManifest);
+    driveBuffer.set(manifestBytes);
+
+    const driveBlob = new Blob([driveBuffer], { type: 'application/octet-stream' });
+    const driveLink = document.createElement('a');
+    driveLink.href = URL.createObjectURL(driveBlob);
+    driveLink.download = `SOVEREIGN_DRIVE_${ownerName.replace(/\s+/g, '_')}.bin`;
+    document.body.appendChild(driveLink);
+    driveLink.click();
+    document.body.removeChild(driveLink);
+    addLog(`Sovereign Drive download initiated.`);
+
+    // 4. GENERATE IDENTITY ANCHOR (.VPU)
+    addLog(`Issuing Identity Certificate...`);
+    const certContent = `--- VPU SOVEREIGN CERTIFICATE ---\n${bundle.certificate || "VALID_IDENTITY"}\n\n--- MANIFEST_REF ---\n${vpuManifest.sector_id}`;
+    const certBlob = new Blob([certContent], { type: 'text/plain' });
+    const certLink = document.createElement('a');
+    certLink.href = URL.createObjectURL(certBlob);
+    certLink.download = `VPU_ANCHOR_${ownerName.replace(/\s+/g, '_')}.vpu`;
+    document.body.appendChild(certLink);
+    certLink.click();
+    document.body.removeChild(certLink);
+    addLog(`Certificate download initiated.`);
+
+    // 5. EXTERNAL SEQUENCE TRIGGER (UI Sync)
+    addLog(`<span style="color:#00ff88;">PROVISIONING COMPLETE.</span>`);
+    localStorage.setItem('vpu_provisioned', 'true');
+    localStorage.setItem('sov_provision_complete', 'true');
+
+    // Optional: Call the original download sequence if you still need the build download
+    if (typeof startProvisioningSequence === 'function') {
+        await startProvisioningSequence(ownerName, bundle, arch);
+    } else {
+        setTimeout(() => {
+            window.location.href = "./complete-profile.html";
+        }, 3000);
+    }
+}
 // --- 8. UI HELPERS ---
 function initDistributionButtons() {
     // 1. Correctly parse the Hash and Parameters
@@ -318,6 +443,20 @@ function initDistributionButtons() {
         };
     });
 }
+
+function normalizeArch(val) {
+    if (!val) return "";
+    val = val.toLowerCase();
+
+    if (val.includes("win")) return "windows";
+    if (val.includes("mac")) return "macos";
+    if (val.includes("linux")) return "linux";
+    if (val.includes("android")) return "android";
+    if (val.includes("ios")) return "ios";
+
+    return val;
+}
+   
 //UI should automatically disable the kernels that don't match their locked_arch returned from the sniffer API, and only allow clicking the compatible one. 
 // This ensures users can't bypass the hardware lock by selecting a different OS option.
 function enforceKernelLock(lockedArch) {
@@ -355,37 +494,55 @@ function enforceKernelLock(lockedArch) {
  */
 function lockProvisioningUI() {
     const interestBtn = document.getElementById('interested-btn');
-    
-    if (interestBtn && window.location.hash === '#provision') {
-        // 1. Change Text to show Authorization
+
+    const params = new URLSearchParams(
+        window.location.hash.replace('#', '').replace('&', '?')
+    );
+    const lockedArch = params.get('arch');
+
+    const mismatchDetected = detectMismatch(lockedArch);
+
+    if (!interestBtn) return;
+
+    // ✅ APPROVED STATE
+    if (window.location.hash.includes('provision') && !mismatchDetected) {
         interestBtn.innerText = "✓ IDENTITY_VERIFIED_BY_ADMIN";
-        
-        // 2. Change Styling to look like a Badge rather than a Button
-        interestBtn.style.background = "rgba(0, 255, 128, 0.1)"; // Faint green glow
+        interestBtn.style.background = "rgba(0, 255, 128, 0.1)";
         interestBtn.style.color = "#00ff80";
         interestBtn.style.border = "1px solid #00ff80";
-        interestBtn.style.boxShadow = "0 0 10px rgba(0, 255, 128, 0.2)";
-        
-        // 3. Disable Interactivity
-        interestBtn.style.cursor = "default";
-        interestBtn.style.pointerEvents = "none"; 
-        
-        // 4. Remove the original hover class
+        interestBtn.style.pointerEvents = "none";
         interestBtn.classList.remove('interest');
-        
-        console.log("SPACS: Member UI locked to 'Approved' state.");
     }
 
+    // ⚠️ MISMATCH STATE (THIS IS WHAT YOU WANTED)
     if (mismatchDetected) {
-    const switchBtn = document.getElementById('interested-btn');
-    switchBtn.innerText = "REQUEST_ARCH_RESET";
-    switchBtn.style.color = "#ffbc00";
-    switchBtn.style.pointerEvents = "auto";
-    switchBtn.onclick = () => {
-        showSovModal("RESET_REQUESTED", "Admin notified. Hardware signature reset pending.");
-        // Call an endpoint to notify Admin
-    };
+        interestBtn.innerText = "REQUEST_ARCH_RESET";
+        interestBtn.style.color = "#ffbc00";
+        interestBtn.style.pointerEvents = "auto";
+
+        interestBtn.onclick = async () => {
+            showSovModal("RESET_REQUESTED", "Admin notified. Hardware signature reset pending.");
+
+            await fetch('http://localhost:3000/api/spacs/request-reset', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    hw_id: localStorage.getItem('hw_id'),
+                    current_arch: detectProvisionManagement(),
+                    expected_arch: lockedArch
+                })
+            });
+        };
+    }
 }
+
+function detectMismatch(lockedArch) {
+    if (!lockedArch) return false;
+
+    const current = detectProvisionManagement().toLowerCase();
+    const expected = lockedArch.toLowerCase();
+
+    return current !== expected;
 }
 
 // This function is called by the sniffer sequence if the user's hardware is locked to a specific architecture. 

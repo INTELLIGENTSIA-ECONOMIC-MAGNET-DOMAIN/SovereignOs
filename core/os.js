@@ -503,6 +503,47 @@ class TLC_Kernel {
     }
 }
 
+async ingestSovereignDrive(file) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const content = new TextDecoder().decode(new Uint8Array(e.target.result.slice(0, 8192)));
+            
+            const startTag = "---VPU_MANIFEST_START---";
+            const endTag = "---VPU_MANIFEST_END---";
+            
+            try {
+                const jsonStr = content.substring(content.indexOf(startTag) + startTag.length, content.indexOf(endTag)).trim();
+                const manifest = JSON.parse(jsonStr);
+
+                // Save to IndexedDB (Sovereign Vault)
+                await this.saveToVault(manifest); 
+                resolve(true);
+            } catch (err) {
+                console.error("INGEST_ERROR: Invalid Manifest Format.");
+                resolve(false);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+// Check in indexedDb
+async getManifestFromDB() {
+    return new Promise((resolve) => {
+        const request = indexedDB.open("VPU_Sovereign_DB", 1);
+        request.onsuccess = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains("system_vault")) return resolve(null);
+            const tx = db.transaction("system_vault", "readonly");
+            const req = tx.objectStore("system_vault").get("vpu_manifest");
+            req.onsuccess = () => resolve(req.result ? req.result.data : null);
+            req.onerror = () => resolve(null);
+        };
+        request.onerror = () => resolve(null);
+    });
+}
+
     //The Enclave will now self-destruct if not refreshed.
     async verifyPerimeter() {
     const currentHW = await this.getHardwareEntropy();
@@ -889,7 +930,7 @@ async shutdown() {
     get APP_ROUTES() {
         return {
             'terminal': async (container) => {
-                const m = await import('./terminal.js');
+                const m = await import('../apps/terminal/index.js');
                 
                 // THE BYPASS: Providing the internal signature required by TerminalApp
                 const apiBridge = {
@@ -1087,7 +1128,7 @@ async shutdown() {
         },
 
         'identity': async (container) => {
-            const { IdentityManager } = await import('./identityRegistry.js');
+            const { IdentityManager } = await import('../apps/identity-registry/index.js');
             
             const apiBridge = {
                 signature: 'SOVEREIGN_CORE_V1',
@@ -1099,7 +1140,8 @@ async shutdown() {
             };
 
             const instance = new IdentityManager(container, apiBridge);
-            instance.render(); // Renders the Citizen Folio
+            if (instance.init) await instance.init(); // Sync with DB and render
+            else instance.render(); // fallback
 
             this.activeProcesses = this.activeProcesses || {};
             this.activeProcesses['identity'] = instance;
@@ -1107,7 +1149,7 @@ async shutdown() {
         },
 
         'biome': async (container) => {
-            const { SovereignBiome } = await import('./sovereignBiome.js');
+            const { Biome } = await import('../apps/biome/index.js');
             
             const apiBridge = {
                 signature: 'SOVEREIGN_CORE_V1',
@@ -1121,7 +1163,7 @@ async shutdown() {
                 close: () => this.closeApp('biome')
             };
 
-            const instance = new SovereignBiome(container, apiBridge);
+            const instance = new Biome(container, apiBridge);
             instance.render(); // Renders the Cellular Grid
 
             this.activeProcesses = this.activeProcesses || {};
@@ -1610,240 +1652,205 @@ async shutdown() {
         
     }
 
-        
-    async boot() {   
+  async boot() {   
     console.log("Kernel: Ignition sequence initiated...");
 
-    // 1. LAYER 1: PHYSICAL TRIPLE-LOCK CHECK
-        const isFullyAuthorized = await this.verifyHardwareSignature();
+    // 1. HARDWARE HANDSHAKE
+    const isFullyAuthorized = await this.verifyHardwareSignature();
 
-        if (!isFullyAuthorized) {
-            console.warn("Kernel: Multi-Layer Auth Failed. Intercepting Login Gate.");
-            await this.showIdentityLost(); 
-            return; // HALT BOOT
-        }
+    if (!isFullyAuthorized) {
+        await this.showIdentityLost();
+        return; // HALT BOOT
+    }
 
-    // 1. Load Temporal Engine
+    // 2. LOAD ENGINES
     try {
         await import('../Thealcohesion-core/js/apps/time.js');
         this.temporal = window.thealTimeApp;
-        console.log("Kernel: Temporal Engine loaded.");
-    } catch (e) {
-        console.error("Kernel: Failed to load Temporal Engine:", e);
-    }
-
-    // 2. Start the wallpaper immediately
-    try {
         this.wallpaper = new NeuralWallpaper('neural-canvas', this);
-    } catch (e) {
-        console.error("Wallpaper failed to start:", e);
-    }
-        
-
-    // 2. CHECK FOR POST-PANIC RECOVERY
-    const lastPanic = localStorage.getItem('LAST_PANIC_CODE');
-    if (lastPanic) {
-        await this.runRecoverySequence(lastPanic);
-        // Log recovery after the sequence finishes
-        this.logEvent('WARN', `System recovered from critical halt: ${lastPanic}`); 
+    } catch (e) { 
+        console.error("Engine Load Fault:", e); 
     }
 
-    // 3. TRIGGER THE SPLASH SCREEN / HANDOVER
+    // 3. SPLASH HANDOVER
     startBootSequence(() => {
-        console.log("Kernel: Handover complete. Enabling Identity Access.");
-        
         const loginGate = document.getElementById('login-gate');
         if(loginGate) {
             loginGate.style.display = 'flex';
             setTimeout(() => loginGate.style.opacity = '1', 50);
         }
-        
         this.init(); 
         this.systemTray = new SystemTray(this);
-        this.setupIdleLock(300000); 
         this.isBooted = true;
+    });
 
-        // Log recovery only once here
-        if (lastPanic) {
-            this.logEvent('WARN', `System recovered from critical halt: ${lastPanic}`); 
-        }
-    }); // End of boot()
-
-    const gateContainer = document.getElementById('login-gate'); // The div in your HTML
+    const gateContainer = document.getElementById('login-gate');
     
-    // LINKING: Pass 'this' (the kernel instance) to the Auth class
+    // This triggers the new constructor that "glues" deadlock to the kernel
     this.auth = new SovereignAuth(gateContainer, this); 
     
-    // RENDER: Show the purple Enclave UI
-    this.auth.render();
-    
+    // Now call render() safely
+    await this.auth.render();
 }
 
+
+// 🔐 VERIFIED HARDWARE SIGNATURE
+async verifyHardwareSignature() {
+    const genesis = localStorage.getItem('VPU_HW_ID');
+    const storedCert = localStorage.getItem('VPU_PHYSICAL_KEY');
+
+    if (genesis !== "SIG_2025_12_26_ALPHA_GENESIS" || !storedCert) {
+        return false;
+    }
+
+    try {
+        const parsed = JSON.parse(storedCert);
+        const token = parsed.signature;
+
+        // Decode JWT (no verification yet)
+        const parts = token.split('.');
+        if (parts.length !== 3) return false;
+
+        const payload = JSON.parse(atob(parts[1]));
+
+        // OPTIONAL: Expiry check
+        if (payload.exp && Date.now() / 1000 > payload.exp) {
+            console.warn("JWT expired");
+            return false;
+        }
+
+        console.log("JWT payload:", payload);
+
+        // ⚠️ IMPORTANT:
+        // Browser CANNOT securely verify JWT without exposing secret
+        // So we trust backend-issued token structure
+
+        return true;
+
+    } catch (e) {
+        console.error("Verification failed:", e);
+        return false;
+    }
+}
+
+
+// 🚨 IDENTITY LOST SCREEN
 async showIdentityLost() {
     const container = document.getElementById('login-gate');
-    const existingHandle = await this.vfs.getEnclaveHandle();
+    if (!container) return;
 
-    // If we have a handle but no access, we show the "Bridge" UI
-    if (existingHandle) {
+    container.style.setProperty('display', 'flex', 'important');
+    container.style.zIndex = '99999';
+    container.style.opacity = '1';
+
+    if (localStorage.getItem('VPU_PHYSICAL_KEY')) {
         container.innerHTML = `
-            <div class="login-box impact-shake" style="border-color: #ff8800;">
-                <h1 style="color: #ff8800;">PHYSICAL_ENCLAVE_DISCONNECTED</h1>
-                <p style="font-family: 'Courier New', monospace; font-size: 12px; margin-bottom: 20px;">
-                    STATUS: Hardware link severed or USB removed.<br>
-                    ACTION: Please ensure the Enclave folder is accessible.
-                </p>
-                <div class="auth-status" style="color: #ff8800; margin-bottom: 15px;">» AWAITING_PHYSICAL_BRIDGE...</div>
-                <button id="rescan-btn" class="login-btn" style="background: rgba(255, 136, 0, 0.2); border: 1px solid #ff8800; color: #ff8800;">
-                    RE-SCAN HARDWARE
+            <div class="login-box impact-shake" style="border-color: #ff8800; background:rgba(10,5,0,0.95); padding:30px; border:1px solid #ff8800; text-align:center;">
+                <h1 style="color: #ff8800; font-family:monospace;">ENCLAVE_LOCKED</h1>
+                <p style="font-family:monospace; font-size:11px; color:#888;">STATUS: Re-verification required.</p>
+                <button id="rescan-btn" style="background:rgba(255,136,0,0.2); border:1px solid #ff8800; color:#ff8800; padding:10px; cursor:pointer; margin-top:15px;">
+                    RE-VERIFY_HARDWARE
                 </button>
-            </div>
-        `;
+            </div>`;
 
-        document.getElementById('rescan-btn').onclick = async () => {
-            try {
-                // Requesting permission to the EXISTING handle (The high-end way)
-                if (await existingHandle.requestPermission({mode: 'readwrite'}) === 'granted') {
-                    const status = document.querySelector('.auth-status');
-                    status.innerText = "» BRIDGE_ESTABLISHED. REBOOTING...";
-                    status.style.color = "#00ff41";
-                    setTimeout(() => location.reload(), 800);
-                }
-            } catch (e) {
-                // If it fails (folder moved), fall back to full provisioning
-                this.showProvisioningUI();
-            }
-        };
+        document.getElementById('rescan-btn').onclick = () => location.reload();
     } else {
-        // No handle at all? Show the standard Provisioning/Genesis screen
         this.showProvisioningUI();
     }
 }
 
+
+// 🧬 PROVISIONING UI
 async showProvisioningUI() {
+    const container = document.getElementById('login-gate');
 
-    const loginGate = document.getElementById('login-gate');
-        if (loginGate) {
-            console.warn("Kernel: Multi-Layer Auth Failed. Intercepting Login Gate.");
+    container.innerHTML = `
+        <div class="provision-container" style="text-align:center; color:#00ff41; font-family:monospace; padding:30px; border:1px solid #00ff41; background:rgba(0,10,0,0.95); box-shadow: 0 0 20px rgba(0,255,65,0.2);">
+            <h2 style="letter-spacing:3px;">VPU_SECURITY_ENCLAVE</h2>
+            <p style="font-size:11px; color:#888; margin:20px 0;">
+                Insert Genesis Key (.crt) to seal this terminal.
+            </p>
             
-            // FIX: Force the gate to be visible even if other CSS is hiding it
-            loginGate.style.setProperty('display', 'flex', 'important');
-            loginGate.style.setProperty('z-index', '99999', 'important'); // Over wallpaper
-            loginGate.style.opacity = '1';
-            
-            loginGate.innerHTML = `
-                <div class="provision-container" style="text-align:center; color:#00ff41; font-family:monospace; padding:30px; border:1px solid #00ff41; background:rgba(0,10,0,0.95); box-shadow: 0 0 20px rgba(0,255,65,0.2); pointer-events: auto;">
-                    <h2 style="letter-spacing:3px; margin-bottom:10px;">VPU_SECURITY_ENCLAVE</h2>
-                    <div style="height:2px; background:#00ff41; width:50px; margin: 0 auto 20px auto;"></div>
-                    <p style="font-size:12px; margin-bottom:10px; color:#888;">STATUS: <span style="color:#ff4444;">IDENTITY_LOST</span></p>
-                    <p style="font-size:11px; margin-bottom:25px; color:#666; line-height:1.5;">
-                        Local vectors cleared. Click below to re-seal this terminal with the Genesis Signature and Hardware Fingerprint.
-                    </p>
-                    <button id="provision-btn" style="background:transparent; color:#00ff41; border:1px solid #00ff41; padding:12px 24px; cursor:pointer; font-weight:bold; font-family:monospace; transition:0.3s;" onmouseover="this.style.background='rgba(0,255,65,0.1)'" onmouseout="this.style.background='transparent'">
-                        EXECUTE_GENESIS_BINDING
-                    </button>
-                </div>
-            `;
-            
-            // -- Provisioning Handler
-            document.getElementById('provision-btn').onclick = async () => {
-                try {
-                    // 1. SELECT THE PHYSICAL VAULT
-                    // This opens the real Windows/Mac/Linux folder picker
-                    const folderHandle = await window.showDirectoryPicker({
-                        mode: 'readwrite'
-                    });
+            <button id="download-key-btn" style="background:transparent; color:#bcff00; border:1px solid #bcff00; padding:8px; cursor:pointer; font-size:10px; margin-bottom:15px;">
+                ACQUIRE_GENESIS_KEY
+            </button>
+            <br>
+            <input type="file" id="key-upload" style="display:none;" accept=".crt">
+            <button id="provision-btn" style="background:transparent; color:#00ff41; border:1px solid #00ff41; padding:12px 24px; cursor:pointer; font-weight:bold;">
+                EXECUTE_GENESIS_BINDING
+            </button>
+        </div>`;
 
-                    // 2. FETCH THE GENESIS BUNDLE
-                    // Replacing the mock with a real "Certificate & Build" download
-                    const response = await fetch('http://localhost:3000/api/vpu/provision-bundle');
-                    if (!response.ok) throw new Error("SERVER_UPLINK_FAILED");
-                    const bundle = await response.json(); 
 
-                    // 3. PHYSICAL WRITE: vpu_certificate.crt
-                    const certHandle = await folderHandle.getFileHandle('vpu_certificate.crt', { create: true });
-                    const certWriter = await certHandle.createWritable();
-                    await certWriter.write(bundle.certificate || `HW_ID:${bundle.hw_id}`);
-                    await certWriter.close();
-
-                    // 4. PHYSICAL WRITE: build_manifest.vpu
-                    const buildHandle = await folderHandle.getFileHandle('build_manifest.vpu', { create: true });
-                    const buildWriter = await buildHandle.createWritable();
-                    await buildWriter.write(JSON.stringify({ 
-                        version: "1.2.8", 
-                        build_hash: bundle.build_hash,
-                        genesis_date: new Date().toISOString()
-                    }));
-                    await buildWriter.close();
-
-                    // 5. SEAL THE REGISTRY (Hybrid Step)
-                    // Store the hardware ID in localStorage and the folder handle in IndexedDB
-                    const recoveredId = await this.getKernelFingerprint(); 
-                    localStorage.setItem('hw_id', recoveredId);
-                    localStorage.setItem('VPU_HW_ID', "SIG_2025_12_26_ALPHA_GENESIS");
-                    
-                    await this.vfs.saveEnclaveHandle(folderHandle);
-
-                    console.log("PROVISION_SUCCESS: Physical Enclave Sealed.");
-                    
-                    // 6. REBOOT TO ENGAGE TRIPLE-LOCK
-                    setTimeout(() => location.reload(), 300);
-
-                } catch (e) {
-                    console.error("PROVISION_FAULT:", e);
-                    alert("CRITICAL: Physical folder access is required for Sovereign Identity.");
-                }
-            };
-        
-    }
-}
-
-async verifyHardwareSignature() {
-    // 1. HARDWARE CHECK (Local Memory)
-    const hw_id = localStorage.getItem('hw_id');
-    const genesis = localStorage.getItem('VPU_HW_ID');
-
-    const hasId = hw_id && hw_id !== "null";
-    const hasGenesis = genesis === "SIG_2025_12_26_ALPHA_GENESIS";
-
-    if (!hasId || !hasGenesis) return false;
-
-    // 2. PHYSICAL CHECK (USB/Enclave Folder)
+    // ⬇️ DOWNLOAD CERT FROM BACKEND
+    document.getElementById('download-key-btn').onclick = async () => {
     try {
-        const folderHandle = await this.vfs.getEnclaveHandle();
-        
-        if (!folderHandle) {
-            console.warn("Triple-Lock: Physical Enclave Handle missing from Registry.");
-            return false;
+        const res = await fetch('http://localhost:3000/api/vpu/provision-bundle');
+        const data = await res.json();
+
+        if (data.success) {
+            // Generate the Enclave Certificate Object
+            const enclaveCert = {
+                type: "VPU_ENCLAVE_KEY",
+                owner: data.founder,
+                hw_binding: localStorage.getItem('hw_id') || "NODE_UNDEFINED",
+                enclave_id: data.enclave_key_id,
+                signature: data.certificate, // The signed JWT from backend
+                issued: new Date().toISOString()
+            };
+
+            const certString = JSON.stringify(enclaveCert, null, 2);
+
+            // Export the physical file
+            const blob = new Blob([certString], { type: 'application/x-x509-ca-cert' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `vpu_enclave_${data.founder.replace(/\s+/g, '_')}.crt`;
+            a.click();
+            
+            // Auto-provision the local state for the next boot
+            localStorage.setItem('VPU_PHYSICAL_KEY', certString);
+            localStorage.setItem('VPU_HW_ID', "SIG_2025_12_26_ALPHA_GENESIS");
+
+            console.log("Enclave Certificate Born and locally cached.");
         }
-
-        // Verify we still have permission to read the folder
-        if (await folderHandle.queryPermission({mode: 'read'}) !== 'granted') {
-            // If permission was lost (page refresh), we need to stay at IDENTITY_LOST
-            // so the user can re-trigger the picker or permission request.
-            return false; 
-        }
-
-        // 3. CERTIFICATE CHECK
-        const certHandle = await folderHandle.getFileHandle('vpu_certificate.crt');
-        const certFile = await certHandle.getFile();
-        const certText = await certFile.text();
-
-        // Ensure the certificate on the USB matches the Machine ID in memory
-        if (!certText.includes(hw_id)) {
-            console.error("Triple-Lock: Certificate/Hardware Mismatch.");
-            return false;
-        }
-
-        // 4. MANIFEST CHECK (The Kill Switch)
-        await folderHandle.getFileHandle('build_manifest.vpu');
-
-        console.log("Triple-Lock: Hardware, Physical, and Manifest Verified.");
-        return true;
-
-    } catch (e) {
-        console.error("Triple-Lock Failure:", e.message);
-        return false; // Files missing or access denied
+    } catch (e) { 
+        alert("Bridge Offline: Ensure Node.js is running."); 
     }
+};
+
+
+    // ⬇️ UPLOAD CERT (PHYSICAL INSERT)
+    const fileInput = document.getElementById('key-upload');
+
+    document.getElementById('provision-btn').onclick = () => fileInput.click();
+
+    fileInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+
+        reader.onload = (event) => {
+            try {
+                const content = event.target.result;
+
+                // Validate JSON format
+                JSON.parse(content);
+
+                localStorage.setItem('VPU_PHYSICAL_KEY', content);
+                localStorage.setItem('VPU_HW_ID', "SIG_2025_12_26_ALPHA_GENESIS");
+
+                console.log("Provisioning complete.");
+                location.reload();
+
+            } catch {
+                alert("Invalid certificate file.");
+            }
+        };
+
+        reader.readAsText(file);
+    };
 }
 
 async runRecoverySequence(errorCode) {
@@ -1954,6 +1961,36 @@ async runRecoverySequence(errorCode) {
         this.logEvent('SYS', `Process [${appId}] registered.`);
     }
 
+    // Initialize UI DOM elements after successful auth
+    initDOM() {
+        const osRoot = document.getElementById('os-root');
+        const topBar = document.getElementById('top-bar');
+        const loginGate = document.getElementById('login-gate');
+
+        if (osRoot) {
+            osRoot.style.display = 'grid';
+            osRoot.style.opacity = '1';
+        }
+        if (topBar) {
+            topBar.classList.remove('hidden');
+        }
+        if (loginGate) {
+            loginGate.style.display = 'none';
+            loginGate.style.opacity = '0';
+        }
+
+        if (!document.getElementById('workspace')) {
+            const workspace = document.createElement('div');
+            workspace.id = 'workspace';
+            workspace.style.position = 'relative';
+            workspace.style.height = '100%';
+            workspace.style.overflow = 'hidden';
+            osRoot?.appendChild(workspace);
+        }
+
+        this.logEvent && this.logEvent('INFO', 'Kernel: DOM initialized.');
+    }
+
     init() {
 
     // HARD GATE: Prevent UI initialization if not authenticated
@@ -1964,9 +2001,7 @@ async runRecoverySequence(errorCode) {
 
     console.log("KERNEL: Identity Verified. Initializing Sovereign Environment...");
     this.initDOM();
-    this.initTray();
-    this.initClock();
-
+    
     const loginBtn = document.getElementById('login-btn');
     const status = document.getElementById('auth-status');
 

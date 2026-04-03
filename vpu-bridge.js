@@ -68,6 +68,123 @@ app.get('/api/vpu/status', async (req, res) => {
     }
 });
 
+// API endpoint for registry members
+app.get('/api/vpu/registry/members', async (req, res) => {
+  try {
+    const query = req.query.q;
+    let sql;
+    let params = [];
+
+    if (query) {
+      sql = `
+        SELECT
+          p.id,
+          p.user_name,
+          p.official_name,
+          p.sovereign_name,
+          p.gender,
+          p.country,
+          p.membership_no,
+          p.bound_machine_id,
+          p.identity_state,
+          p.registration_state,
+          p.is_frozen,
+          r.name as rank_name,
+          r.code as rank_code,
+          ms.code as membership_status,
+          mc.name as membership_category,
+          pm.start_date,
+          pm.end_date,
+          array_agg(rec.code) as special_recognitions,
+          pm_profile.url as profile_avatar
+        FROM person p
+        LEFT JOIN person_rank pr ON p.id = pr.person_id
+        LEFT JOIN rank r ON pr.rank_id = r.id
+        LEFT JOIN person_membership pm ON p.id = pm.person_id
+        LEFT JOIN membership_status ms ON pm.membership_status_id = ms.id
+        LEFT JOIN membership_category mc ON pm.membership_category_id = mc.id
+        LEFT JOIN person_recognition prec ON p.id = prec.person_id
+        LEFT JOIN recognition rec ON prec.recognition_id = rec.id
+        LEFT JOIN person_media pm_profile ON p.id = pm_profile.person_id AND pm_profile.media_type = 'profile'
+        WHERE p.sovereign_name ILIKE $1 OR p.user_name ILIKE $1 OR p.country ILIKE $1 OR p.official_name ILIKE $1
+        GROUP BY p.id, p.user_name, p.official_name, p.sovereign_name, p.gender, p.country, p.membership_no, p.bound_machine_id, p.identity_state, p.registration_state, p.is_frozen, r.name, r.code, ms.code, mc.name, pm.start_date, pm.end_date, pm_profile.url
+        ORDER BY p.created_at DESC
+      `;
+      params = [`%${query}%`];
+    } else {
+      sql = `
+        SELECT
+          p.id,
+          p.user_name,
+          p.official_name,
+          p.sovereign_name,
+          p.gender,
+          p.country,
+          p.membership_no,
+          p.bound_machine_id,
+          p.identity_state,
+          p.registration_state,
+          p.is_frozen,
+          r.name as rank_name,
+          r.code as rank_code,
+          ms.code as membership_status,
+          mc.name as membership_category,
+          pm.start_date,
+          pm.end_date,
+          array_agg(rec.code) as special_recognitions,
+          pm_profile.url as profile_avatar
+        FROM person p
+        LEFT JOIN person_rank pr ON p.id = pr.person_id
+        LEFT JOIN rank r ON pr.rank_id = r.id
+        LEFT JOIN person_membership pm ON p.id = pm.person_id
+        LEFT JOIN membership_status ms ON pm.membership_status_id = ms.id
+        LEFT JOIN membership_category mc ON pm.membership_category_id = mc.id
+        LEFT JOIN person_recognition prec ON p.id = prec.person_id
+        LEFT JOIN recognition rec ON prec.recognition_id = rec.id
+        LEFT JOIN person_media pm_profile ON p.id = pm_profile.person_id AND pm_profile.media_type = 'profile'
+        GROUP BY p.id, p.user_name, p.official_name, p.sovereign_name, p.gender, p.country, p.membership_no, p.bound_machine_id, p.identity_state, p.registration_state, p.is_frozen, r.name, r.code, ms.code, mc.name, pm.start_date, pm.end_date, pm_profile.url
+        ORDER BY p.created_at DESC
+      `;
+    }
+
+    const result = await pool.query(sql, params);
+
+    // Transform to match the expected format
+    const members = result.rows.map(row => ({
+      officialName: row.official_name,
+      sovereignName: row.sovereign_name || row.user_name,
+      userName: row.user_name,
+      gender: row.gender,
+      country: row.country,
+      membershipNo: row.membership_no,
+      boundMachineId: row.bound_machine_id,
+      profileAvatar: row.profile_avatar,
+      identityState: row.identity_state,
+      registrationState: row.registration_state,
+      isFrozen: row.is_frozen,
+      rank: {
+        name: row.rank_name,
+        code: row.rank_code
+      },
+      membership: {
+        status: row.membership_status,
+        category: row.membership_category,
+        startDate: row.start_date,
+        endDate: row.end_date
+      },
+      security: {
+        uid: row.id
+      },
+      specialRecognition: row.special_recognitions ? row.special_recognitions.filter(r => r !== null) : []
+    }));
+
+    res.json(members);
+  } catch (err) {
+    console.error('Error fetching members:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 
 // ---VPU LOGIN (Identity Binding) ---
@@ -948,53 +1065,202 @@ app.get('/api/vpu/registry/members', async (req, res) => {
  */
 app.get('/api/vpu/provision-bundle', async (req, res) => {
     try {
-        // 1. Fetch the absolute Genesis identity from the DB.
-        // We look for ID 1 (The Root) or the specific Founder name.
+        // FIX: Cast UUID to TEXT to allow comparison with '1'
         const result = await pool.query(
-            "SELECT official_name, sovereign_name, id FROM person WHERE id = 1 OR official_name = 'Michael Audi' LIMIT 1"
+            "SELECT official_name, sovereign_name, id FROM person WHERE id::text = '1' OR official_name = 'Michael Audi' LIMIT 1"
         );
 
-        // 2. STRICTURE: If the database is empty or the record is missing, FAIL.
         if (result.rows.length === 0) {
-            console.error("!!! PROVISION_BLOCK: No Genesis Identity found in 'person' table.");
-            return res.status(403).json({ 
-                error: "IDENTITY_NOT_FOUND", 
-                message: "Genesis record missing from Sovereign Database." 
-            });
+            return res.status(403).json({ error: "IDENTITY_NOT_FOUND" });
         }
 
         const identity = result.rows[0];
+        const enclaveSeed = require('crypto').randomBytes(16).toString('hex').toUpperCase();
 
-        // 3. Create the Real Payload
         const payload = {
-            org: "THEALCOHESION_SOVEREIGN",
-            uid: identity.id.toString().padStart(4, '0'),
+            uid: identity.id,
             founder: identity.official_name,
-            sovereign: identity.sovereign_name,
             build: "1.2.8_GENESIS",
-            iat: Math.floor(Date.now() / 1000),
-            iss: "VPU_BRIDGE_ROOT"
+            iat: Math.floor(Date.now() / 1000)
         };
 
-        // 4. Sign with your environment's Private Secret
-        const signedCert = jwt.sign(payload, process.env.JWT_SECRET, { algorithm: 'HS256' });
-
-        // 5. Generate Hardware-Linked Hash
-        const buildHash = require('crypto')
-            .createHash('sha256')
-            .update(signedCert + identity.id)
-            .digest('hex')
-            .toUpperCase();
+        const signedCert = jwt.sign(payload, process.env.JWT_SECRET || 'GENESIS_SECRET');
 
         res.json({
-            certificate: `-----BEGIN VPU SOVEREIGN CERTIFICATE-----\n${signedCert}\n-----END VPU SOVEREIGN CERTIFICATE-----`,
-            build_hash: buildHash,
-            hw_id: `VPU-NODE-${identity.id}-${Date.now().toString(36).toUpperCase()}`
+            success: true,
+            certificate: signedCert,
+            enclave_key_id: enclaveSeed,
+            founder: identity.official_name
         });
 
     } catch (err) {
         console.error("!!! GENESIS_PROVISION_CRASH:", err);
         res.status(500).json({ error: "DATABASE_UPLINK_CRASH" });
+    }
+});
+
+// ===== BIOME API ENDPOINTS =====
+
+// Get all action centers
+app.get('/api/vpu/action-centers', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                ac.id,
+                ac.name,
+                ac.area_code,
+                ac.latitude,
+                ac.longitude,
+                ac.country,
+                COUNT(DISTINCT t.id) as tlc_count,
+                COUNT(DISTINCT pm.person_id) as member_count
+            FROM action_center ac
+            LEFT JOIN tlc t ON t.action_center_id = ac.id
+            LEFT JOIN person_membership pm ON pm.action_center_id = ac.id
+            GROUP BY ac.id, ac.name, ac.area_code, ac.latitude, ac.longitude, ac.country
+            ORDER BY ac.name ASC
+        `);
+        
+        res.json(result.rows.map(row => ({
+            id: row.id,
+            name: row.name,
+            action_center_id: row.id,
+            action_center_name: row.name,
+            area_code: row.area_code,
+            latitude: row.latitude || -1.286389,
+            longitude: row.longitude || 36.817223,
+            lat: row.latitude || -1.286389,
+            lng: row.longitude || 36.817223,
+            country: row.country,
+            tlc_capacity: row.tlc_count || 100,
+            member_count: parseInt(row.member_count || 0)
+        })));
+    } catch (err) {
+        console.error("ACTION_CENTERS_FETCH_ERROR:", err.message);
+        res.status(500).json({ error: "Failed to fetch action centers" });
+    }
+});
+
+// Get TLC nodes for a specific action center
+app.get('/api/vpu/action-centers/:acId/tlc', async (req, res) => {
+    try {
+        const { acId } = req.params;
+        const result = await pool.query(`
+            SELECT 
+                t.id,
+                t.name,
+                t.area_code,
+                t.latitude,
+                t.longitude,
+                COUNT(DISTINCT pm.person_id) as member_count
+            FROM tlc t
+            LEFT JOIN person_membership pm ON pm.tlc_id = t.id
+            WHERE t.action_center_id = $1 OR t.id = $1
+            GROUP BY t.id, t.name, t.area_code, t.latitude, t.longitude
+            ORDER BY t.name ASC
+        `, [acId]);
+        
+        res.json(result.rows.map(row => ({
+            id: row.id,
+            tlc_id: row.id,
+            name: row.name,
+            tlc_name: row.name,
+            area_code: row.area_code,
+            latitude: row.latitude || -1.286389,
+            longitude: row.longitude || 36.817223,
+            lat: row.latitude || -1.286389,
+            lng: row.longitude || 36.817223,
+            member_count: parseInt(row.member_count || 0)
+        })));
+    } catch (err) {
+        console.error("TLC_FETCH_ERROR:", err.message);
+        res.status(500).json({ error: "Failed to fetch TLC nodes" });
+    }
+});
+
+// Get members for a specific action center
+app.get('/api/vpu/action-centers/:acId/members', async (req, res) => {
+    try {
+        const { acId } = req.params;
+        const result = await pool.query(`
+            SELECT 
+                p.id,
+                p.user_name,
+                p.official_name,
+                p.sovereign_name,
+                p.membership_no,
+                p.country,
+                ac.id as action_center_id,
+                ac.name as action_center_name,
+                r.name as rank_name,
+                r.code as rank_code
+            FROM person p
+            JOIN person_membership pm ON p.id = pm.person_id
+            LEFT JOIN action_center ac ON pm.action_center_id = ac.id
+            LEFT JOIN person_rank pr ON p.id = pr.person_id
+            LEFT JOIN rank r ON pr.rank_id = r.id
+            WHERE ac.id = $1 OR ac.area_code = $1
+            ORDER BY p.official_name ASC
+        `, [acId]);
+        
+        res.json(result.rows.map(row => ({
+            id: row.id,
+            user_name: row.user_name,
+            official_name: row.official_name,
+            sovereign_name: row.sovereign_name,
+            membership_no: row.membership_no,
+            country: row.country,
+            action_center: row.action_center_name,
+            action_center_id: row.action_center_id,
+            rank: row.rank_name,
+            security: { uid: row.id }
+        })));
+    } catch (err) {
+        console.error("ACTION_CENTER_MEMBERS_FETCH_ERROR:", err.message);
+        res.status(500).json({ error: "Failed to fetch action center members" });
+    }
+});
+
+// Get members for a specific TLC
+app.get('/api/vpu/tlc/:tlcId/members', async (req, res) => {
+    try {
+        const { tlcId } = req.params;
+        const result = await pool.query(`
+            SELECT 
+                p.id,
+                p.user_name,
+                p.official_name,
+                p.sovereign_name,
+                p.membership_no,
+                p.country,
+                t.id as tlc_id,
+                t.name as tlc_name,
+                r.name as rank_name,
+                r.code as rank_code
+            FROM person p
+            JOIN person_membership pm ON p.id = pm.person_id
+            LEFT JOIN tlc t ON pm.tlc_id = t.id
+            LEFT JOIN person_rank pr ON p.id = pr.person_id
+            LEFT JOIN rank r ON pr.rank_id = r.id
+            WHERE t.id = $1 OR t.area_code = $1
+            ORDER BY p.official_name ASC
+        `, [tlcId]);
+        
+        res.json(result.rows.map(row => ({
+            id: row.id,
+            user_name: row.user_name,
+            official_name: row.official_name,
+            sovereign_name: row.sovereign_name,
+            membership_no: row.membership_no,
+            country: row.country,
+            tlc: row.tlc_name,
+            tlc_id: row.tlc_id,
+            rank: row.rank_name,
+            security: { uid: row.id }
+        })));
+    } catch (err) {
+        console.error("TLC_MEMBERS_FETCH_ERROR:", err.message);
+        res.status(500).json({ error: "Failed to fetch TLC members" });
     }
 });
 

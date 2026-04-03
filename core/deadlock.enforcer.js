@@ -1,10 +1,16 @@
 /**
  * deadlock.enforcer.js - IRREVERSIBLE CONTAINMENT
  */
+import { VoidEnclave } from './void_enclave.js';
 export class Deadlock {
     constructor(kernel, container) {
         this.kernel = kernel;
         this.container = container;
+    }
+
+    // ALIAS: This satisfies the call from auth.js line 74
+    async executeLockdown(reason = "MANUAL_TRIGGER") {
+        return this.enforce(reason);
     }
 
     /**
@@ -27,10 +33,10 @@ export class Deadlock {
 
         // 4. Force UI Regression to Void-Enclave
         // We import the VoidEnclave dynamically to prevent circular dependencies
-        import('./states/void_enclave.js').then(module => {
-            const voidState = new module.VoidEnclave(this.container);
-            voidState.materialize(`TERMINATED: ${reason}`);
-        });
+        // 2. Clear UI and Materialize the Void
+        this.container.innerHTML = ""; 
+        const voidState = new VoidEnclave(this.container);
+        voidState.materialize(`TERMINATED: ${reason}`);
 
         // 5. Notify Admin (EPOS/Investor Security Protocol)
         this.notifyBreach(reason);
