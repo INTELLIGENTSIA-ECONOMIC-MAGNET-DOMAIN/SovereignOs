@@ -362,6 +362,14 @@ class TLC_Kernel {
             this.events.dispatchEvent(new CustomEvent(event, { detail: data }));
         };
 
+        this.notify = (msg, type = 'normal') => {
+            if (typeof this.showNotification === 'function') {
+                this.showNotification(msg, type);
+                return;
+            }
+            console.log(`[KERNEL_NOTIFY ${type.toUpperCase()}]: ${msg}`);
+        };
+
         // Orchestration Logic
         this.on('FILE_CREATED', (fileData) => {
             // Refresh FilesApp only if it's currently running to save memory
@@ -955,8 +963,13 @@ async shutdown() {
                 return instance;
             },
             'time': async (container) => {
-                const m = await import('../Thealcohesion-core/js/apps/time.js');
-                const instance = new m.TimeApp(container);
+                const { TimeApp } = await import('../apps/time/index.js');
+                const { SovereignGovernance } = await import('../apps/sovereignVFS.js');
+
+                // Initialize Governance with the Driver and the Kernel as the API
+                const governance = new SovereignGovernance(this, window.SovereignVFS);
+
+                const instance = new TimeApp(container, governance, this.sessionKey, 'USER');
                 instance.init();
                 return instance;
             },
@@ -977,7 +990,7 @@ async shutdown() {
 
             'app-store': async (container) => {
                 // If app-center.js is in /js/os-core/apps/
-                const { HiveCenter } = await import('./app-center.js'); 
+                const { HiveCenter } = await import('../apps/app-center/index.js'); 
                 
                 const apiBridge = {
                     signature: 'SOVEREIGN_CORE_V1',
@@ -1045,7 +1058,7 @@ async shutdown() {
             },
 
             'files': async (container) => {
-                const { FilesApp } = await import('./files.js');
+                const { FilesApp } = await import('../apps/filing-system/index.js');
                 const { SovereignGovernance } = await import('../apps/sovereignVFS.js');
 
                 // 1. Initialize Governance with the Driver and the Kernel as the API
@@ -1078,29 +1091,29 @@ async shutdown() {
             },
 
             'comms': async (container) => {
-                const { CommsApp } = await import('../apps/CommsApp.js');
-                
-                // The Comms Hub needs access to the VFS for attachments 
+                const { onInit } = await import('../apps/comms/index.js');
+
+                // The Comms Hub needs access to the VFS for attachments
                 // and the Kernel's notify system for signal alerts.
                 const apiBridge = {
                     signature: 'SOVEREIGN_CORE_V1',
                     vfs: this.vfs,
                     notify: (msg) => this.showNotification ? this.showNotification(msg) : console.log(msg),
                     getRole: () => this.userRole || 'OFFICER',
+                    getSignature: () => this.userRole || 'ADMIN_CORE_01',
                     // Logic to bridge back to Files if user wants to pick an attachment
-                    openFilePicker: () => this.launchApp('files') 
+                    openFilePicker: () => this.launchApp('files'),
+                    container: container
                 };
 
-                const instance = new CommsApp(container, apiBridge);
-                
-                // Initialize internal transmission logs
-                if (instance.init) await instance.init();
+                // Initialize the modular app
+                onInit(apiBridge);
 
                 // Register process for Kernel tracking
                 this.activeProcesses = this.activeProcesses || {};
-                this.activeProcesses['comms'] = instance;
+                this.activeProcesses['comms'] = { container, apiBridge };
 
-                return instance;
+                return { container, apiBridge };
             },
 
             'monitor': async (container) => {
@@ -1665,11 +1678,11 @@ async shutdown() {
 
     // 2. LOAD ENGINES
     try {
-        await import('../Thealcohesion-core/js/apps/time.js');
-        this.temporal = window.thealTimeApp;
+        const { TimeModel } = await import('../apps/time/model.js');
+        this.temporal = new TimeModel();
         this.wallpaper = new NeuralWallpaper('neural-canvas', this);
-    } catch (e) { 
-        console.error("Engine Load Fault:", e); 
+    } catch (e) {
+        console.error("Engine Load Fault:", e);
     }
 
     // 3. SPLASH HANDOVER
@@ -2155,9 +2168,6 @@ triggerLockShake() {
         
         if (!this.sessionKey) throw new Error("Binding Conflict Detected");
 
-        // c. PROVISION ALLOTMENTS (2025-12-26)
-        await this.provisionInitialFiles();
-
         } catch (e) {
             console.error("VPU_CORE_REJECTION:", e);
             alert("CRITICAL: Binding Mismatch. Device or Network not authorized.");
@@ -2183,10 +2193,6 @@ triggerLockShake() {
             
             if (!this.sessionKey) throw new Error("Key Derivation Failed");
 
-            // 3. ENCLAVE PROVISIONING
-            // Critical: Ensure Investor Allotment (2025-12-26) is written to IndexedDB
-            await this.provisionInitialFiles();
-            
             console.log("Kernel: Sovereign Enclave Unlocked. Validating Genesis Block...");
         } catch (e) {
             console.error("VFS CRITICAL ERROR:", e);
@@ -2220,11 +2226,13 @@ triggerLockShake() {
         // 5. SUBSYSTEM IGNITION
         try {
             // Boot Clock Engine
-            const { TimeApp } = await import('../Thealcohesion-core/js/apps/time.js');
-            const bootClock = new TimeApp();
-            if (bootClock.app && bootClock.app.startClock) {
-                bootClock.app.startClock(); 
-            }
+            const { TimeModel } = await import('../apps/time/model.js');
+            const { TimeApp } = await import('../apps/time/index.js');
+            const { SovereignGovernance } = await import('../apps/sovereignVFS.js');
+
+            const governance = new SovereignGovernance(this, window.SovereignVFS);
+            const bootClock = new TimeApp(null, governance, this.sessionKey, 'SYSTEM');
+            bootClock.startClock();
         } catch (e) {
             console.warn("Temporal Engine: Secondary ignition failed, but system remains stable.");
         }
@@ -2272,41 +2280,7 @@ triggerLockShake() {
     }
     }
 
-   async provisionInitialFiles() {
-    // 1. Get the current user ID to find the correct mount point
-    const userId = this.user?.identity;
-    if (!userId) return;
-
-    // 2. Define the full path within the user's enclave
-    const vaultPath = `/users/${userId}/vaultfiles/investors.txt`;
-    const readmePath = `/users/${userId}/home/readme.txt`;
-
-    try {
-        const check = await this.vfsBridge.read(vaultPath);
-        
-        if (!check) {
-            console.log("Kernel: Genesis Boot. Provisioning encrypted volumes...");
-            
-            // Write to the user's private encrypted vault
-            await this.vfsBridge.write(
-                vaultPath, 
-                "OFFICIAL RECORD: EPOS 2025-12-26\n--------------------------------\nAllotment: 15,000,000 VPU\nStatus: Verified & Locked\nTrust Tier: Root"
-            );
-
-            await this.vfsBridge.write(
-                readmePath, 
-                "Welcome to Sovereign OS. Your data is encrypted locally using AES-GCM."
-            );
-            
-            this.logEvent('SUCCESS', 'Genesis Allotment written to Enclave.');
-        }
-    } catch (err) {
-        console.warn("Provisioning interrupted:", err.message);
-    }
-}
-
-
-async getGeolocation() {
+   async getGeolocation() {
     return new Promise((resolve) => {
         if (!navigator.geolocation) {
             resolve(null); // No GPS available
@@ -2930,8 +2904,11 @@ suspendSession() {
                     setTimeout(() => existingHud.remove(), 200);
                     return;
                 }
-                const { TimeApp } = await import('../Thealcohesion-core/js/apps/time.js');
-                new TimeApp().app.renderHUD(); 
+                const { TimeView } = await import('../apps/time/view.js');
+                const { TimeModel } = await import('../apps/time/model.js');
+                const model = new TimeModel();
+                const view = new TimeView(null, model);
+                view.renderHUD();
             };
         }
     }

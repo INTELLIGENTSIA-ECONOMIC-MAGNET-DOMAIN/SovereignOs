@@ -1,6 +1,6 @@
 {
-  "id": "time",
-  "name": "Time Manager",
+  "id": "filing-system",
+  "name": "Filing System",
   "version": "1.0.0",
   "permissions": [],
   "entry": "index.js",

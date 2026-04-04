@@ -146,11 +146,13 @@ export class AuthManager {
         // 5. SUBSYSTEM IGNITION
         try {
             // Boot Clock Engine
-            const { TimeApp } = await import('../apps/time.js');
-            const bootClock = new TimeApp();
-            if (bootClock.app && bootClock.app.startClock) {
-                bootClock.app.startClock(); 
-            }
+            const { TimeModel } = await import('../apps/time/model.js');
+            const { TimeApp } = await import('../apps/time/index.js');
+            const { SovereignGovernance } = await import('../apps/sovereignVFS.js');
+
+            const governance = new SovereignGovernance(this.kernel, window.SovereignVFS);
+            const bootClock = new TimeApp(null, governance, this.kernel.sessionKey, 'SYSTEM');
+            bootClock.startClock();
         } catch (e) {
             console.warn("Temporal Engine: Secondary ignition failed, but system remains stable.");
         }

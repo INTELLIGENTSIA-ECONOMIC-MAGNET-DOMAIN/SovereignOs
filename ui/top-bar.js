@@ -48,8 +48,11 @@ setupTopBarInteractions(kernel) {
                     setTimeout(() => existingHud.remove(), 200);
                     return;
                 }
-                const { TimeApp } = await import('../apps/time.js');
-                new TimeApp().app.renderHUD(); 
+                const { TimeView } = await import('../apps/time/view.js');
+                const { TimeModel } = await import('../apps/time/model.js');
+                const model = new TimeModel();
+                const view = new TimeView(null, model);
+                view.renderHUD();
             };
         }
         

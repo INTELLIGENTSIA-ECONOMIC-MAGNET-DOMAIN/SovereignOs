@@ -352,8 +352,13 @@ export class ProcessManager {
                     return instance;
                 },
                 'time': async (container) => {
-                    const m = await import('../apps/time.js');
-                    const instance = new m.TimeApp(container);
+                    const { TimeApp } = await import('../apps/time/index.js');
+                    const { SovereignGovernance } = await import('../apps/sovereignVFS.js');
+
+                    // Initialize Governance with the Driver and the Kernel as the API
+                    const governance = new SovereignGovernance(this, window.SovereignVFS);
+
+                    const instance = new TimeApp(container, governance, this.sessionKey, 'USER');
                     instance.init();
                     return instance;
                 },
@@ -374,7 +379,7 @@ export class ProcessManager {
     
                 'app-store': async (container) => {
                     // If app-center.js is in /js/os-core/apps/
-                    const { HiveCenter } = await import('./app-center.js'); 
+                    const { HiveCenter } = await import('../apps/app-center/index.js'); 
                     
                     const apiBridge = {
                         signature: 'SOVEREIGN_CORE_V1',
@@ -382,7 +387,7 @@ export class ProcessManager {
                         getRoles: () => this.userRole || ['ANY'],
                         getLiveResourceLoad: (id) => 10 // Added to prevent 'undefined' errors
                     };
-    
+
                     const instance = new HiveCenter(container, apiBridge);
                     instance.init();
                     return instance;
@@ -442,7 +447,7 @@ export class ProcessManager {
                 },
     
                 'files': async (container) => {
-                    const { FilesApp } = await import('./files.js');
+                    const { FilesApp } = await import('../apps/filing-system/index.js');
                     const { SovereignGovernance } = await import('../apps/sovereignVFS.js');
     
                     // 1. Initialize Governance with the Driver and the Kernel as the API
@@ -475,29 +480,29 @@ export class ProcessManager {
                 },
     
                 'comms': async (container) => {
-                    const { CommsApp } = await import('../apps/CommsApp.js');
-                    
-                    // The Comms Hub needs access to the VFS for attachments 
+                    const { onInit } = await import('../apps/comms/index.js');
+
+                    // The Comms Hub needs access to the VFS for attachments
                     // and the Kernel's notify system for signal alerts.
                     const apiBridge = {
                         signature: 'SOVEREIGN_CORE_V1',
                         vfs: this.vfs,
                         notify: (msg) => this.showNotification ? this.showNotification(msg) : console.log(msg),
                         getRole: () => this.userRole || 'OFFICER',
+                        getSignature: () => this.userRole || 'ADMIN_CORE_01',
                         // Logic to bridge back to Files if user wants to pick an attachment
-                        openFilePicker: () => this.launchApp('files') 
+                        openFilePicker: () => this.launchApp('files'),
+                        container: container
                     };
-    
-                    const instance = new CommsApp(container, apiBridge);
-                    
-                    // Initialize internal transmission logs
-                    if (instance.init) await instance.init();
-    
+
+                    // Initialize the modular app
+                    onInit(apiBridge);
+
                     // Register process for Kernel tracking
                     this.activeProcesses = this.activeProcesses || {};
-                    this.activeProcesses['comms'] = instance;
-    
-                    return instance;
+                    this.activeProcesses['comms'] = { container, apiBridge };
+
+                    return { container, apiBridge };
                 },
     
                 'monitor': async (container) => {
