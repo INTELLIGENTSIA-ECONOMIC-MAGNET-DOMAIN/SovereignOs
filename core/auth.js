@@ -138,6 +138,33 @@ setupSecretIngress() {
      * Coordinates the 8-Component Architecture
      */
    async handleHandshake(creds) {
+    // 1. EXTRACT DATA SAFELY
+    // Priority 1: Use the 'creds' object passed from the event listener
+    // Priority 2: Fallback to DOM if 'creds' is missing
+    const user = (creds && creds.id) ? creds.id : (document.getElementById('vpu-user-input')?.value || "");
+    const pass = (creds && creds.pass) ? creds.pass : (document.getElementById('vpu-pass-input')?.value || "");
+
+    // --- DURESS PROTOCOL (The "False Reset") ---
+    const DURESS_USER = "GUEST"; 
+    const PANIC_PIN   = "9999";
+
+    if (user.toUpperCase() === DURESS_USER && pass === PANIC_PIN) {
+        console.warn("» DURESS_PROTOCOL_ENGAGED: Initiating False Purge.");
+        
+        // Ensure VoidEnclave is imported or available
+        const voidEnclave = new VoidEnclave(this.container, this.kernel);
+        voidEnclave.materialize("DURESS_IDENTITY_VIOLATION"); 
+        
+        sessionStorage.removeItem('vpu_session_token');
+        return; 
+    }
+
+    // Ensure we have something to work with before proceeding
+    if (!user || !pass) {
+        console.warn("» AUTH_ABORTED: Handshake triggered with empty credentials.");
+        return;
+    }
+    // Proceed with the normal handshake flow using the 'creds' object for consistency
     if (window.VPU_RECOVERY_MODE) return;
     
     // 1. THE LOCK: Stop the "Ghost" request if one is already running
