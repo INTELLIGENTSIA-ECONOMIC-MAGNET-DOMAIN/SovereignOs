@@ -37,22 +37,8 @@ export class SovereignAuth {
 
         // 5. Setup the secret ingress click sequence for recovery mode
         this.logoClicks = 0;
-        this.setupSecretIngress = () => {
-    // Check for both the logo OR the auth-status header
-        const trigger = document.getElementById('vpu-logo') || document.getElementById('auth-status');
-        if (trigger) {
-            trigger.onclick = () => {
-                this.logoClicks++;
-                if (this.logoClicks >= 3) {
-                    console.log("» SECRET_INGRESS: Manual Recovery Triggered.");
-                    this.showRecoveryTrigger();
-                    this.logoClicks = 0; 
-                }
-                setTimeout(() => this.logoClicks = 0, 5000);
-            };
-        }
-    };
 
+        // 6. Attach this auth instance to the kernel for global access (Crucial for VFS permissions)
         this.kernel.auth = this;
     }
     
@@ -62,19 +48,24 @@ export class SovereignAuth {
      * "Awakens" the HTML Login-Gate
      */
     activateSniffer() {
-        this.container.style.display = 'flex';
         const btn = document.getElementById('login-btn');
         const statusHeader = document.getElementById('auth-status'); // [ADD THIS]
 
         // Make the status header clickable to trigger the recovery mode as well
         if (statusHeader) {
-            statusHeader.style.cursor = 'pointer'; // Visual hint it's clickable
-            statusHeader.onclick = () => {
-                console.log("» HEADER_INGRESS: Manual Override Triggered.");
-                this.showRecoveryTrigger(); // Reveals the hidden button
-            };
-        }
-        if (!btn) return;
+        statusHeader.style.cursor = 'pointer';
+        statusHeader.onclick = (e) => {
+            e.stopPropagation(); // Prevent bubbling
+            this.logoClicks++;
+            console.log(`» INGRESS_STEP: ${this.logoClicks}/3`);
+            if (this.logoClicks >= 3) {
+                this.showRecoveryTrigger(); // This will handle showing the trigger inside the box
+                this.logoClicks = 0;
+            }
+        };
+    }
+
+    if (!btn) return;
 
         // Reset the button state on activation
         btn.onclick = async () => {
@@ -94,7 +85,53 @@ export class SovereignAuth {
             // Execute the combined sequence
             await this.handleHandshake(credentials);
         };
+    // Ensure the secret ingress is wired if the logo exists
+    this.setupSecretIngress();
     }
+
+    //secret ingress trigger for recovery mode
+setupSecretIngress() {
+    // 1. Identify all valid secret triggers
+    const triggers = [
+        document.getElementById('vpu-logo'),
+        document.getElementById('auth-status')
+    ].filter(el => el !== null);
+
+    triggers.forEach(trigger => {
+        trigger.style.cursor = 'pointer';
+        
+        // Remove any old listeners to prevent double-firing
+        trigger.onclick = null; 
+
+        trigger.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation(); // CRITICAL: Prevent triggering the login box/sniffer
+
+            this.logoClicks++;
+            console.log(`» INGRESS_STEP: ${this.logoClicks}/3`);
+
+            // Visual feedback (optional: subtle flicker)
+            trigger.style.opacity = '0.7';
+            setTimeout(() => trigger.style.opacity = '1', 100);
+
+            if (this.logoClicks >= 3) {
+                console.log("» INGRESS_GRANTED: Materializing Recovery...");
+                this.showResetModal();
+                this.logoClicks = 0; 
+                if(this.clickTimeout) clearTimeout(this.clickTimeout);
+            } else {
+                // Refresh the timeout: user must click 3 times within 3 seconds
+                if(this.clickTimeout) clearTimeout(this.clickTimeout);
+                this.clickTimeout = setTimeout(() => {
+                    if (this.logoClicks > 0) {
+                        console.log("» INGRESS_TIMEOUT: Counter Reset.");
+                        this.logoClicks = 0;
+                    }
+                }, 3000);
+            }
+        };
+    });
+}
 
     /**
      * THE HANDSHAKE FLOW
@@ -307,48 +344,62 @@ export class SovereignAuth {
                 await this.kernel.transitionToShell();
          
            } else {
-                // FAILURE HANDLING: Reset the lock to allow retry
-                this.isUplinking = false; // Allow another attempt
-                this.showRecoveryTrigger();// Show the recovery trigger in case of failure
-                status.innerText = "HANDSHAKE_FAILED: INVALID_CREDENTIALS";
-                // 1. Trigger Rejection Visuals
+                // --- PROGRESSIVE SECURITY ESCALATION ---
+                this.isUplinking = false; // Release lock for retry
+
+                // 1. Manage Failure Counter
+                let fails = parseInt(localStorage.getItem('vpu_fail_count') || 0);
+                fails++;
+                localStorage.setItem('vpu_fail_count', fails.toString());
+
+                // 2. Visual Rejection
                 box.classList.remove('uplink-glow');
                 box.classList.add('impact-shake');
-                
-                // 2. LOGIC FIX: Determine exactly what to say
-                if (window.kernel.lastAuthError === "HARDWARE_ID_REJECTED") {
-                    status.innerText = "SECURITY_DENIAL: UNAUTHORIZED_HARDWARE";
-                } else if (window.kernel.lastAuthError === "NETWORK_UPLINK_REJECTED") {
-                    status.innerText = "SECURITY_DENIAL: UNAUTHORIZED_NETWORK";
-                } else {
-                    // THIS WAS MISSING: Handles wrong password or general failure
-                    status.innerText = "HANDSHAKE_FAILED: INVALID_CREDENTIALS";
-                }
-
-                // 3. Apply Rejection Styling
                 status.style.color = "#ff4444";
                 box.style.borderColor = '#ff4444';
                 
-                // 4. Reset Button
+                // 3. Logic Check: Trigger Deadlock or show standard error
+                if (fails >= 3) {
+                    // RESET COUNTER FOR NEXT SESSION AND TRIGGER DEADLOCK
+                    localStorage.setItem('vpu_fail_count', "0");
+                    status.innerText = "SECURITY_CRITICAL: ENGAGING_DEADLOCK...";
+                    
+                    setTimeout(() => {
+                        this.deadlock.executeLockdown("MAX_ATTEMPTS_EXCEEDED");
+                    }, 800);
+                    return; // Stop execution here; Deadlock takes over the UI
+                }
+
+                // 4. Handle Specific Rejection Messages (for fails < 3)
+                if (window.kernel.lastAuthError === "HARDWARE_ID_REJECTED") {
+                    status.innerText = `SECURITY_DENIAL: UNAUTHORIZED_HARDWARE (${fails}/3)`;
+                } else if (window.kernel.lastAuthError === "NETWORK_UPLINK_REJECTED") {
+                    status.innerText = `SECURITY_DENIAL: UNAUTHORIZED_NETWORK (${fails}/3)`;
+                } else {
+                    status.innerText = `HANDSHAKE_FAILED: INVALID_CREDENTIALS (${fails}/3)`;
+                }
+
+                // 5. Reset Button for next attempt
                 loginBtn.innerHTML = `<span class="btn-text">INITIATE_HANDSHAKE</span>`;
                 loginBtn.disabled = false;
                 loginBtn.style.opacity = '1';
 
-                // 5. Return to Standby after 3 seconds
+                // 6. Return to Standby after 3 seconds
                 setTimeout(() => {
                     box.classList.remove('impact-shake');
-                    status.innerText = "STANDBY: Awaiting Credentials...";
-                    status.style.color = "#00ff41"; 
-                    box.style.borderColor = '#004411';
+                    // Check if a recovery trigger was manually popped via secret ingress
+                    if (!document.getElementById('recovery-trigger')) {
+                        status.innerText = "STANDBY: Awaiting Credentials...";
+                        status.style.color = "#00ff41";
+                        box.style.borderColor = '#004411';
+                    }
                 }, 3000);
-            
-        } 
-    }catch (e) {
+            }
+        } catch (e) {
+            this.isUplinking = false;
             status.innerText = "CRITICAL_AUTH_ERROR";
             console.error("ORCHESTRATOR_FAULT:", e);
-        }
-    }
-
+        }}
     /**
  * INGESTION PROTOCOL: BINARY TO INDEXEDDB
  * Reads a physical .bin file and re-seeds the Sovereign Manifest.
@@ -546,8 +597,10 @@ renderMountButton() {
      * SHOW_RECOVERY_TRIGGER: Display the recovery trigger for manual recovery
      */
     showRecoveryTrigger() {
+        console.log("» INGRESS_GRANTED: Materializing Recovery...");
+        window.VPU_RECOVERY_MODE = true;
         if (document.getElementById('recovery-trigger')) return;
-
+        this.container.style.display = 'flex';
         const trigger = document.createElement('div');
         trigger.id = 'recovery-trigger';
         trigger.style.cssText = `
@@ -573,6 +626,13 @@ renderMountButton() {
 
         const loginBox = document.getElementById('login-box');
         if (loginBox) loginBox.appendChild(trigger);
+
+        // Import the gate renderer if not already available
+        import('./recovery-gate.js').then(module => {
+            module.renderRecoveryGate(this.kernel);
+        }).catch(err => {
+            console.error("» MATERIALIZATION_FAULT: Recovery Gate missing", err);
+        });
     }
     /**
      * RENDER: Initialize and display the login interface
