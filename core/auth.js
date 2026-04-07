@@ -32,8 +32,30 @@ export class SovereignAuth {
         this.sniffer = new Sniffer();
         this.uplink = new Uplink(kernel);
 
+        // 4. uplinking lock to prevent multiple simultaneous attempts
+        this.isUplinking = false;
+
+        // 5. Setup the secret ingress click sequence for recovery mode
+        this.logoClicks = 0;
+        this.setupSecretIngress = () => {
+    // Check for both the logo OR the auth-status header
+        const trigger = document.getElementById('vpu-logo') || document.getElementById('auth-status');
+        if (trigger) {
+            trigger.onclick = () => {
+                this.logoClicks++;
+                if (this.logoClicks >= 3) {
+                    console.log("» SECRET_INGRESS: Manual Recovery Triggered.");
+                    this.showRecoveryTrigger();
+                    this.logoClicks = 0; 
+                }
+                setTimeout(() => this.logoClicks = 0, 5000);
+            };
+        }
+    };
+
         this.kernel.auth = this;
     }
+    
 
     /**
      * ROLE 1: SNIFFER INGRESS (Activation)
@@ -42,6 +64,16 @@ export class SovereignAuth {
     activateSniffer() {
         this.container.style.display = 'flex';
         const btn = document.getElementById('login-btn');
+        const statusHeader = document.getElementById('auth-status'); // [ADD THIS]
+
+        // Make the status header clickable to trigger the recovery mode as well
+        if (statusHeader) {
+            statusHeader.style.cursor = 'pointer'; // Visual hint it's clickable
+            statusHeader.onclick = () => {
+                console.log("» HEADER_INGRESS: Manual Override Triggered.");
+                this.showRecoveryTrigger(); // Reveals the hidden button
+            };
+        }
         if (!btn) return;
 
         // Reset the button state on activation
@@ -54,6 +86,10 @@ export class SovereignAuth {
                 pass: passField.value,
                 timestamp: Date.now()
             };
+            if(!credentials.id || !credentials.pass) {
+                console.warn("» AUTH_ABORTED: Handshake triggered with empty credentials.");
+                return;
+            }
 
             // Execute the combined sequence
             await this.handleHandshake(credentials);
@@ -66,10 +102,21 @@ export class SovereignAuth {
      */
    async handleHandshake(creds) {
     if (window.VPU_RECOVERY_MODE) return;
+    
+    // 1. THE LOCK: Stop the "Ghost" request if one is already running
+    if (this.isUplinking) return; 
+
+    // 2. DATA VALIDATION: If creds are empty, don't talk to the server
+    if (!creds || !creds.id || !creds.pass) {
+        console.warn("» AUTH_ABORTED: Handshake triggered with empty credentials.");
+        return;
+    }
+
+    this.isUplinking = true; // Set the lock
     const status = document.getElementById('auth-status');
     const loginBtn = document.getElementById('login-btn');
     const box = document.getElementById('login-box') || this.container;
-    
+
     // 1. DATA EXTRACTION
     let manifestEntry = this.kernel.manifest;
     
@@ -104,24 +151,30 @@ export class SovereignAuth {
     // 2. THE SAFE EXTRACTION FIX (Prevents "manifest.data is undefined")
     const manifest = manifestEntry.data ? manifestEntry.data : manifestEntry;
 
-    // 3. THE IDENTITY ALIGNMENT (Multi-Vector Fix)
-    // Extract all possible valid IDs from the manifest
-    const registeredID = (manifest.membership_no || manifest.owner || "").trim().toUpperCase();
-    const registeredName = (manifest.official_name || manifest.founder || "ARCHANTI").trim().toUpperCase();
+   // --- 3. THE DYNAMIC IDENTITY ALIGNMENT ---
+    // 1. Extract Membership Number (EPOS-2025-01226)
+    const ownerNumber = (manifest.owner || "").trim().toUpperCase();
+
+    // 2. Extract Username (ARCHAN)
     const inputUsername = (creds.id || "").trim().toUpperCase();
 
-    // Log the vectors so you can see what the Kernel is comparing
-    console.log(`» IDENTITY_LOG: Vectors [ID: ${registeredID} | Name: ${registeredName}]`);
-    console.log(`» IDENTITY_LOG: Received [${inputUsername}]`);
+    // 3. THE FIX: Get the JWT Signature from the .crt data or LocalStorage
+    // Ensure your .crt loading logic saves the signature to a variable we can access here
+    const enclaveRaw = manifest.signature || 
+                    creds.enclave_sig || 
+                    localStorage.getItem('TLC_ENCLAVE_MASTER_KEY');
 
-    // ALLOW access if input matches the ID OR the Name
-    const isAuthorized = (inputUsername === registeredID) || (inputUsername === registeredName);
+    // Log to browser console to verify before sending
+    console.log(`» IDENTITY: ${inputUsername} | OWNER: ${ownerNumber}`);
+    console.log(`» SIG_LOADED: ${enclaveRaw ? 'YES (Starts with eyJ...)' : 'FAILED - UNDEFINED'}`);
 
-    if (!isAuthorized) {
-        // Trigger deadlock only if it matches NEITHER
-        this.kernel.deadlock.executeLockdown(`IDENTITY_MISMATCH: [${inputUsername}] is not authorized for this Vault.`);
-        return; 
+    // 4. UPLINK
+    if (!inputUsername || !ownerNumber || !enclaveRaw) {
+        console.error("» IDENTITY_VOID: Missing critical vector. Aborting handshake.");
+        this.isUplinking = false; // Reset lock
+        return;
     }
+    const authPromise = this.kernel.attemptLogin(inputUsername, creds.pass, enclaveRaw, ownerNumber);
     
     console.log("» IDENTITY_ALIGNED: Proceeding to Cryptographic Handshake...");
 
@@ -136,8 +189,6 @@ export class SovereignAuth {
             box.classList.add('impact-shake', 'uplink-glow');
             setTimeout(() => box.classList.remove('impact-shake'), 500);
 
-            // 2. Start Database Auth in background immediately
-            const authPromise = this.kernel.attemptLogin(creds.id, creds.pass);
         try {
             // 3. Visual Cryptographic Sequence
             const sequence = [
@@ -211,23 +262,38 @@ export class SovereignAuth {
                     sessionMode: decision.mode // "FULL_ACCESS" or "LIMITED_ACCESS"
                 };
 
+                
                 // --- PHASE 4: VFS MOUNT & PROVISIONING ---
                 const engine = new IndexedDBEngine();
                 const driver = new EncryptedDiskDriver(engine, creds.id);
                 await driver.load();
 
+                // 1. MOUNT FIRST
                 this.kernel.vfs.mount(`/users/${creds.id}`, driver);
+
+                // 2. IMPORTANT: Set the active user in the VFS permission layer 
+                // so it knows who is allowed to write to /users/ARCHAN
+                this.kernel.vfs.setActiveUser(creds.id); 
 
                 if (!driver.isInitialized) {
                     status.innerText = decision.mode === "FULL_ACCESS" 
                         ? "» PROVISIONING_GENESIS_SECTORS (FULL)..." 
                         : "» PROVISIONING_ROAMING_SECTORS (LIMITED)...";
                     
+                    // 3. Use the Kernel's VFS instance directly to ensure 
+                    // permissions are inherited correctly
                     const provisioner = new NativeDriver();
-                    await provisioner.provisionEnclave(this.kernel.vfs, creds.id);
-                    
-                    driver.isInitialized = true;
-                    await driver.save(); 
+                    try {
+                        await provisioner.provisionEnclave(this.kernel.vfs, creds.id);
+                        driver.isInitialized = true;
+                        await driver.save(); 
+                    } catch (provisionError) {
+                        console.error("Provisioning interrupted, retrying with elevation...", provisionError);
+                        // Fallback: Attempt to provision directly to the driver if VFS layer blocks it
+                        await provisioner.provisionEnclave(driver, creds.id); 
+                        driver.isInitialized = true;
+                        await driver.save();
+                    }
                 }
 
                 // --- PHASE 5: MATERIALIZATION ---
@@ -241,6 +307,10 @@ export class SovereignAuth {
                 await this.kernel.transitionToShell();
          
            } else {
+                // FAILURE HANDLING: Reset the lock to allow retry
+                this.isUplinking = false; // Allow another attempt
+                this.showRecoveryTrigger();// Show the recovery trigger in case of failure
+                status.innerText = "HANDSHAKE_FAILED: INVALID_CREDENTIALS";
                 // 1. Trigger Rejection Visuals
                 box.classList.remove('uplink-glow');
                 box.classList.add('impact-shake');
@@ -473,13 +543,45 @@ renderMountButton() {
     }
 
     /**
+     * SHOW_RECOVERY_TRIGGER: Display the recovery trigger for manual recovery
+     */
+    showRecoveryTrigger() {
+        if (document.getElementById('recovery-trigger')) return;
+
+        const trigger = document.createElement('div');
+        trigger.id = 'recovery-trigger';
+        trigger.style.cssText = `
+            margin-top: 15px;
+            padding-top: 10px;
+            border-top: 1px solid #111;
+            text-align: center;
+            animation: fadeIn 1.5s ease;
+        `;
+        
+        trigger.innerHTML = `
+            <span style="color: #222; font-size: 9px; cursor: pointer; letter-spacing: 1px; text-transform: uppercase;"
+                  onmouseover="this.style.color='#800080'" 
+                  onmouseout="this.style.color='#222'">
+                [ SECURE_RECOVERY_INGRESS ]
+            </span>
+        `;
+
+        trigger.onclick = () => {
+            // Launches your recovery target selection (User or Pass)
+            this.showResetModal(); 
+        };
+
+        const loginBox = document.getElementById('login-box');
+        if (loginBox) loginBox.appendChild(trigger);
+    }
+    /**
      * RENDER: Initialize and display the login interface
      * Uses a direct database handshake to prevent race conditions.
      */
     async render() {
         this.activateSniffer();
 
-        // 1. Define the exact coordinates of Michael Audi's Vault
+        // 1. Define the exact coordinates of user's Vault
         const DB_NAME = "SOVEREIGN_CORE_DB"; 
         const STORE_NAME = "manifest_store";
 
@@ -515,9 +617,180 @@ renderMountButton() {
             if (modal) modal.remove();
             
             this.container.style.display = 'flex';
+            this.setupSecretIngress(); // Initialize the secret ingress
             const status = document.getElementById('auth-status');
             if (status) status.innerText = "STANDBY: Awaiting Credentials...";
         }
     }
+
+/**
+ * RECOVERY PROTOCOL: Multi-Channel Uplink + Manifest & Enclave Validation
+ * This is triggered from the Deadlock Enforcer when the user exhausts all attempts.
+ */
+
+showResetModal() {
+    // Prevent Deadlock timer from interfering
+    window.VPU_RECOVERY_MODE = true; 
+    
+    const modal = document.createElement('div');
+    modal.className = 'sovereign-modal';
+    modal.style = "position:fixed; inset:0; background:rgba(0,0,0,0.95); display:flex; align-items:center; justify-content:center; z-index:10000000;";
+    
+    modal.innerHTML = `
+        <div class="modal-content" style="border:1px solid #ff4444; padding:40px; background:#000; text-align:center;">
+            <h3 style="color:#ff4444;">SELECT_RECOVERY_TARGET</h3>
+            <button id="reset-user-btn" class="tlc-btn">RESET_USERNAME</button>
+            <button id="reset-pass-btn" class="tlc-btn">RESET_PASSWORD</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById('reset-user-btn').onclick = () => this.renderResetFields('USERNAME');
+    document.getElementById('reset-pass-btn').onclick = () => this.renderResetFields('PASSWORD');
+}
+
+async renderResetFields(type) {
+    const container = document.querySelector('.modal-content');
+    const fields = type === 'USERNAME' ? `
+        <input type="text" id="new-user" placeholder="NEW_USERNAME" class="tlc-input">
+        <input type="text" id="rep-user" placeholder="REPEAT_USERNAME" class="tlc-input">
+    ` : `
+        <input type="text" id="cur-user" placeholder="CURRENT_USERNAME" class="tlc-input">
+        <input type="password" id="new-pass" placeholder="NEW_PASSWORD" class="tlc-input">
+        <input type="password" id="rep-pass" placeholder="REPEAT_PASSWORD" class="tlc-input">
+    `;
+
+    container.innerHTML = `
+        <h4 style="color:#ffbc00;">RECOVERY_HANDSHAKE [${type}]</h4>
+        <div id="reset-status" style="color:#888; font-size:10px; margin-bottom:10px;">AWAITING_UPLINK_AND_FILES...</div>
+        ${fields}
+        <input type="text" id="reset-code" placeholder="ENTER_UPLINK_CODE" class="tlc-input">
+        <div class="upload-section">
+            <label>MANIFEST (.bin)</label> <input type="file" id="manifest-upload">
+            <br><label>ENCLAVE KEY (.txt)</label> <input type="file" id="enclave-upload">
+        </div>
+        <button id="finalize-reset-btn" style="margin-top:20px; background:#ff4444; color:#000; padding:10px; width:100%;">AUTHORIZE_REWRITING</button>
+    `;
+
+    // 1. Send Multi-Channel Code
+    const code = Math.floor(100000 + Math.random() * 900000);
+    sessionStorage.setItem('vpu_recovery_code', code.toString());
+    await this.uplink.sendTelegram(`🚨 RECOVERY_CODE: <code>${code}</code>`);
+    
+    // 2. Attach final execution
+    document.getElementById('finalize-reset-btn').onclick = () => this.executeFinalReset(type);
+}
+
+
+async executeFinalReset(type) {
+    const status = document.getElementById('reset-status');
+    const inputCode = document.getElementById('reset-code').value;
+    const manifestFile = document.getElementById('manifest-upload').files[0];
+    const enclaveFile = document.getElementById('enclave-upload').files[0];
+
+    // 1. Validate Uplink Code
+    const activeCode = sessionStorage.getItem('vpu_recovery_code');
+    if (inputCode !== activeCode) {
+        status.innerText = "ERROR: INVALID_UPLINK_CODE";
+        status.style.color = "#ff4444";
+        return;
+    }
+
+    try {
+        status.innerText = "INITIATING_GLOBAL_HANDSHAKE...";
+        status.style.color = "#ffbc00";
+
+        // 2. Extract Enclave Data (The Key)
+        const enclaveRaw = await enclaveFile.text();
+        const enclaveData = JSON.parse(enclaveRaw);
+        const signature = enclaveData.signature;
+        
+
+        // 3. Extract Manifest Data (The Drive)
+        const manifestRaw = await manifestFile.text();
+        const jsonMatch = manifestRaw.match(/---VPU_MANIFEST_START---([\s\S]*?)---VPU_MANIFEST_END---/);
+        const manifestData = JSON.parse(jsonMatch ? jsonMatch[1].trim() : manifestRaw);
+
+        // 4. Hardware/Sovereign Binding Check
+        if (enclaveData.hw_binding !== manifestData.hardware_binding) {
+            throw new Error("HARDWARE_MISMATCH: Enclave key does not match this Sovereign Drive.");
+        }
+
+        // 5. Prepare Payload
+        let newValue;
+        if (type === 'USERNAME') {
+            newValue = document.getElementById('new-user').value.trim().toUpperCase();
+            const repValue = document.getElementById('rep-user').value.trim().toUpperCase();
+            if (!newValue || newValue !== repValue) throw new Error("USER_MISMATCH");
+        } else {
+            const rawPass = document.getElementById('new-pass').value;
+            const repPass = document.getElementById('rep-pass').value;
+            if (!rawPass || rawPass !== repPass) throw new Error("PASS_MISMATCH");
+            newValue = btoa(rawPass); 
+        }
+
+        // 6. Global Bridge Sync (PostgreSQL)
+        status.innerText = "SYNCHRONIZING_CORE_DATABASE...";
+        
+        // Use window reference to ensure it finds the function from loading.js
+        const hardwareID = await (async () => {
+            try {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl');
+                const renderer = gl ? gl.getParameter(gl.RENDERER) : "GENERIC_VPU";
+                const entropy = [navigator.hardwareConcurrency, renderer, screen.colorDepth, navigator.deviceMemory].join("||");
+                const msgBuffer = new TextEncoder().encode(entropy);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+                return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+            } catch (e) { return "0x_ANONYMOUS_GENESIS_CORE"; }
+        })();
+
+        const dbResponse = await fetch('http://localhost:3000/api/v1/system/sync-sovereign-identity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: type,
+                payload: newValue,
+                enclave_sig: signature,
+                manifest_owner: manifestData.owner,
+                hw_id: hardwareID 
+            })
+        });
+
+        if (!dbResponse.ok) {
+            const err = await dbResponse.json();
+            throw new Error(err.error || "REMOTE_REJECTION");
+        }
+
+        // 7. Local Persistence (VFS & Storage)
+        status.innerText = "COMMITTING_TO_VFS...";
+        await this.ingestSovereignDrive(manifestFile);
+        
+        localStorage.setItem('TLC_ENCLAVE_MASTER_KEY', signature);
+        if (type === 'USERNAME') {
+            localStorage.setItem('vpu_username', newValue);
+        } else {
+            localStorage.setItem('vpu_auth_payload', newValue);
+        }
+
+        // 8. Clear Deadlock State
+        localStorage.setItem('vpu_fail_count', "0");
+        localStorage.setItem('vpu_loop_count', "0");
+        localStorage.removeItem('vpu_deadlock_flag');
+        sessionStorage.removeItem('vpu_recovery_code');
+        
+        status.innerHTML = "<span style='color: #00ff41;'>SYNC_COMPLETE. REBOOTING KERNEL...</span>";
+        
+        setTimeout(() => {
+            window.VPU_RECOVERY_MODE = false;
+            location.replace(window.location.pathname); 
+        }, 2500);
+
+    } catch (e) {
+        status.innerText = `FAULT: ${e.message.toUpperCase()}`;
+        status.style.color = "#ff4444";
+        console.error("GLOBAL_RESET_ERROR:", e);
+    }
+}
     
 }

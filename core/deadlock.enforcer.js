@@ -1,49 +1,103 @@
 /**
- * deadlock.enforcer.js - IRREVERSIBLE CONTAINMENT
+ * deadlock.enforcer.js - PROGRESSIVE CONTAINMENT & RECOVERY
+ * Role: Manages Cooldown Loops and Escalation to Sovereign Reset
  */
 import { VoidEnclave } from './void_enclave.js';
+
 export class Deadlock {
     constructor(kernel, container) {
         this.kernel = kernel;
         this.container = container;
     }
 
-    // ALIAS: This satisfies the call from auth.js line 74
-    async executeLockdown(reason = "MANUAL_TRIGGER") {
-        return this.enforce(reason);
+    /**
+     * EXECUTE LOCKDOWN
+     * Triggered by Gatekeeper after 2 failed PIN/Password attempts.
+     */
+    async executeLockdown(reason = "AUTH_VIOLATION") {
+        console.error(`[!!!] DEADLOCK_ENGAGED: ${reason}`);
+
+        // 1. Shred current session for safety
+        sessionStorage.removeItem('vpu_session_token');
+
+        // 2. Increment Loop Counter
+        let loops = parseInt(localStorage.getItem('vpu_loop_count') || 0);
+        loops++;
+        localStorage.setItem('vpu_loop_count', loops.toString());
+
+        // 3. Initiate the 60s Countdown Loop
+        this.initiateCooldown(60, loops, reason);
     }
 
     /**
-     * ENFORCE FINALITY
-     * Triggered by Gatekeeper or Kernel upon critical violation.
+     * COOLDOWN LOOP (60 Seconds)
      */
-    enforce(reason) {
-        console.error(`[!!!] DEADLOCK_ACTIVATED: ${reason}`);
+    initiateCooldown(seconds, loopCount, reason) {
+        let timeLeft = seconds;
+        
+        // Clear UI to prevent interaction during deadlock
+        this.container.innerHTML = `<div id="deadlock-gate"></div>`;
+        const gate = document.getElementById('deadlock-gate');
 
-        // 1. Shred Session Material
-        localStorage.removeItem('vpu_session_token');
-        sessionStorage.clear();
+        const timer = setInterval(() => {
+            timeLeft--;
 
-        // 2. Bind Hardware Lock (24h cooldown)
-        const expiry = Date.now() + (24 * 60 * 60 * 1000);
-        localStorage.setItem('vpu_deadlock_flag', expiry.toString());
+            gate.innerHTML = `
+                <div class="deadlock-overlay" style="
+                    display: flex; flex-direction: column; align-items: center; justify-content: center;
+                    height: 100vh; background: #000; color: #ff4444; font-family: monospace;
+                ">
+                    <h1 style="letter-spacing: 5px; border-bottom: 2px solid #ff4444;">SECURITY_DEADLOCK</h1>
+                    <div style="font-size: 3rem; margin: 20px; font-weight: bold;">${timeLeft}s</div>
+                    <p>UNAUTHORIZED_ACCESS_DETECTED [LOOP ${loopCount}/3]</p>
+                    <p style="color: #666; font-size: 12px;">SYSTEM_COOLDOWN_IN_PROGRESS</p>
 
-        // 3. Emit OS-level shutdown
-        if (this.kernel) this.kernel.isBooted = false;
+                    ${loopCount >= 3 ? `
+                        <button id="vpu-reset-trigger" style="
+                            margin-top: 30px; background: none; border: 1px solid #ff4444; 
+                            color: #ff4444; padding: 15px 30px; cursor: pointer; text-transform: uppercase;
+                        ">System Reset Required</button>
+                    ` : ''}
+                </div>
+            `;
 
-        // 4. Force UI Regression to Void-Enclave
-        // We import the VoidEnclave dynamically to prevent circular dependencies
-        // 2. Clear UI and Materialize the Void
-        this.container.innerHTML = ""; 
-        const voidState = new VoidEnclave(this.container);
-        voidState.materialize(`TERMINATED: ${reason}`);
+            // If 3 loops are completed, allow access to the Reset Modal
+            if (loopCount >= 3) {
+                const btn = document.getElementById('vpu-reset-trigger');
+                if (btn) {
+                    btn.onclick = () => {
+                        clearInterval(timer);
+                        this.kernel.auth.showResetModal();
+                    };
+                }
+            }
 
-        // 5. Notify Admin (EPOS/Investor Security Protocol)
-        this.notifyBreach(reason);
+            if (timeLeft <= 0) {
+                clearInterval(timer);
+                
+                if (loopCount < 3) {
+                    // Reset failure count but keep loop count, then reload for another try
+                    localStorage.setItem('vpu_fail_count', "0");
+                    location.reload(); 
+                } else {
+                    // If they ignored the reset button and time ran out after loop 3
+                    gate.innerHTML = `<h2 style="color:#ff4444">STALL_DETECTED: REBOOT_REQUIRED</h2>`;
+                }
+            }
+        }, 1000);
+    }
+
+    /**
+     * ALIAS: Clean reset after successful recovery
+     */
+    clearAllDeadlocks() {
+        localStorage.setItem('vpu_fail_count', "0");
+        localStorage.setItem('vpu_loop_count', "0");
+        localStorage.removeItem('vpu_deadlock_flag');
     }
 
     async notifyBreach(reason) {
-        // Implementation for your WhatsApp/API alert
-        console.warn("Security breach telemetry transmitted to Sovereign Admin.");
+        // Telemetry to Admin/Uplink
+        console.warn(`Sovereign Alert: Deadlock Loop initiated. Reason: ${reason}`);
     }
 }

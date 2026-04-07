@@ -12,7 +12,13 @@ export class VFSManager {
     constructor(kernel) {
         this.kernel = kernel;
         this.mounts = new MountManager();
-        this.permissions = new PermissionLayer();
+        this.permissions = new PermissionLayer(this);
+        this.activeUser = null; // Track the active user for permission checks
+    }
+
+    setActiveUser(userId) {
+        console.log(`[VFS]: Security context shifted to: ${userId}`);
+        this.activeUser = userId;
     }
 
     mount(path, driver) {
@@ -31,26 +37,26 @@ export class VFSManager {
     }
 
     async write(path, data) {
-        this.permissions.checkWrite(path);
+        this.permissions.checkWrite(path, this.activeUser);
         const { driver, subpath } = resolvePath(path, this.mounts);
         return driver.write(subpath, data);
     }
 
     async delete(path) {
-        this.permissions.checkWrite(path);
+        this.permissions.checkWrite(path, this.activeUser);
         const { driver, subpath } = resolvePath(path, this.mounts);
         return driver.delete(subpath);
     }
 
     async list(path) {
-        this.permissions.checkRead(path);
+        this.permissions.checkRead(path, this.activeUser);
         const { driver, subpath } = resolvePath(path, this.mounts);
         return driver.list(subpath);
     }
 
     async exists(path) {
         try {
-            this.permissions.checkRead(path);
+            this.permissions.checkRead(path, this.activeUser);
             const { driver, subpath } = resolvePath(path, this.mounts);
             return await driver.exists(subpath);
         } catch (e) {

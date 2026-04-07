@@ -18,6 +18,7 @@ async function generateLocalFingerprint() {
         return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
     } catch (e) { return "0x_ANONYMOUS_GENESIS_CORE"; }
 }
+
 // --- 1. GLOBAL UI & POINTER ---
 const pointer = document.createElement('div');
 pointer.id = 'custom-pointer';

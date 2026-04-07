@@ -41,10 +41,10 @@ if (!process.env.DB_PASSWORD) {
 }
 
 const pool = new Pool({
-  user: process.env.DB_USER || 'archanti',
+  user: process.env.DB_USER,
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'thealcohesion_vpu',
-  password: String(process.env.DB_PASSWORD || 'archanti'), // Force string type
+  password: String(process.env.DB_PASSWORD), // Force string type
   port: process.env.DB_PORT || 5432,
 });
 
@@ -189,16 +189,39 @@ app.get('/api/vpu/registry/members', async (req, res) => {
 
 // ---VPU LOGIN (Identity Binding) ---
 app.post('/api/vpu/login', loginLimiter, async (req, res) => {
-    const username = req.body.username || req.body.id; 
+    const username = (req.body.username || req.body.id || "").trim(); 
+    const owner_number = (req.body.owner_number || "").trim();
     const password = req.body.password || req.body.pass;
     const machineFingerprint = req.body.machineFingerprint || req.body.hwSig;
+    const enclave_sig = req.body.enclave_sig; // <--- THE NEW VECTOR
     const ipAddress = req.body.ipAddress || req.ip || "127.0.0.1";
+    // VALIDATION: Ensure required fields are present
+    if (!username || !owner_number) {
+        return res.status(400).json({ success: false, message: "EMPTY_IDENTITY_VECTOR" });
+    }
 
     try {
-        const result = await pool.query('SELECT * FROM person WHERE user_name ILIKE $1', [username]);
-        
+        // THE TRIPLE LOCK QUERY
+        // Checks: 1. Username/Membership | 2. Linked Owner Number | 3. Existing Enclave Signature
+        const result = await pool.query(`
+            SELECT 
+                p.id, p.user_name, p.password_hash, p.is_frozen,
+                p.bound_machine_id, p.membership_no,
+                ps.enclave_public_key 
+            FROM person p 
+            LEFT JOIN person_security ps ON p.id = ps.person_id 
+            WHERE p.user_name ILIKE $1  -- $1 is the Username from the input
+            AND p.membership_no ILIKE $2 -- $2 is the Owner Number from the .bin manifest
+        `, [username, owner_number]);
+
         if (result.rows.length === 0) {
-            return res.json({ success: false, message: "IDENTITY_NOT_FOUND" });
+            // Log exactly what failed for your debugging
+            console.error(`[AUTH_BLOCK] No DB match for User:${username} | Owner:${owner_number} | Sig:${enclave_sig?.substring(0,10)}...`);
+            
+            return res.status(401).json({ 
+                success: false, 
+                message: "IDENTITY_MISMATCH: Credential/Media/Signature alignment failed." 
+            });
         }
 
         const person = result.rows[0];
@@ -211,18 +234,46 @@ app.post('/api/vpu/login', loginLimiter, async (req, res) => {
         // 2. PASSWORD CHECK
         const validPassword = await bcrypt.compare(password, person.password_hash);
         if (!validPassword) {
+            console.error(`[AUTH_FAIL] Password mismatch for ${username}`);
             return res.json({ success: false, message: "INVALID_CREDENTIALS" });
+        }
+        // 3. SOVEREIGN ENCLAVE BINDING (If the signature doesn't match, we update it. This allows users to switch devices but still have the enclave bound to their identity.)
+        // If password is correct, we "Trust and Seal" the signature provided.
+        if (!person.enclave_public_key && enclave_sig) {
+            await pool.query(`
+                INSERT INTO person_security (person_id, enclave_public_key, root_identity_hash)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (person_id) DO UPDATE SET enclave_public_key = $2
+            `, [person.id, enclave_sig, '0x_GENESIS_ROOT']);
+            console.log(`>>> SOVEREIGN_ENCLAVE_BOUND for ${username}`);
+        }
+
+        // 3a. VALIDATE KEY: If DB ALREADY has a key, it MUST match the .crt file
+        if (person.enclave_public_key && person.enclave_public_key !== enclave_sig) {
+        return res.status(403).json({ error: "ENCLAVE_MISMATCH" });
         }
 
         // 3. GENESIS BINDING
-        if (!person.bound_machine_id) {
+        if (!person.bound_machine_id || !person.root_identity_hash) {
+            await pool.query('BEGIN');
+            
+            // Update Machine Binding
             await pool.query(
-                'UPDATE person SET bound_machine_id = $1, bound_ip_address = $2, binding_date = NOW(), failed_attempts = 0 WHERE user_name ILIKE $3',
-                [machineFingerprint, ipAddress, username]
+                'UPDATE person SET bound_machine_id = $1, bound_ip_address = $2, binding_date = NOW() WHERE id = $3',
+                [machineFingerprint, ipAddress, person.id]
             );
-            // Update local person object for the JWT payload below
-            person.bound_machine_id = machineFingerprint;
-        } 
+
+            // Update Sovereign Enclave Binding
+            if (enclave_sig) {
+                await pool.query(
+                    'UPDATE person_security SET enclave_public_key = $1, failed_login_attempts = 0 WHERE person_id = $2',
+                    [enclave_sig, person.id]
+                );
+                console.log(`>>> SOVEREIGN_ENCLAVE_BOUND for ${username}`);
+            }
+
+            await pool.query('COMMIT');
+        }
         // 4. HARDWARE ENFORCEMENT
         else if (person.bound_machine_id !== machineFingerprint) {
             const newAttempts = (person.failed_attempts || 0) + 1;
@@ -1086,11 +1137,23 @@ app.get('/api/vpu/provision-bundle', async (req, res) => {
 
         const signedCert = jwt.sign(payload, process.env.JWT_SECRET || 'GENESIS_SECRET');
 
+        // --- Save the signature to the Security Table ---
+        await pool.query(`
+            UPDATE person_security 
+            SET enclave_public_key = $1, 
+                last_key_rotation = NOW() 
+            WHERE person_id = $2`, 
+        [signedCert, identity.id]);
+
+        console.log(`>>> GENESIS_ASSETS_PROVISIONED for ${identity.official_name}`);
+
         res.json({
             success: true,
             certificate: signedCert,
             enclave_key_id: enclaveSeed,
-            founder: identity.official_name
+            founder: identity.official_name,
+            issued_at: new Date().toISOString()
+            
         });
 
     } catch (err) {
@@ -1261,6 +1324,61 @@ app.get('/api/vpu/tlc/:tlcId/members', async (req, res) => {
     } catch (err) {
         console.error("TLC_MEMBERS_FETCH_ERROR:", err.message);
         res.status(500).json({ error: "Failed to fetch TLC members" });
+    }
+});
+
+// --- SOVEREIGN IDENTITY SYNC ENDPOINT ---
+app.post('/api/v1/system/sync-sovereign-identity', async (req, res) => {
+    // DATA DERIVED STRICTLY FROM ENCLAVE & MANIFEST
+    const { type, payload, enclave_sig } = req.body;
+
+    if (!enclave_sig || enclave_sig.length < 64) {
+        return res.status(400).json({ error: "INVALID_SOVEREIGN_ENCLAVE" });
+    }
+
+    try {
+        // Map 'type' to the exact column (USERNAME -> user_name, PASSWORD -> password_hash)
+        const targetColumn = type === 'USERNAME' ? 'user_name' : 'password_hash';
+
+        // THE PURE ATOMIC SYNC
+        // This query finds the person linked to the Enclave Signature and updates them.
+        const syncResult = await pool.query(`
+            UPDATE person 
+            SET ${targetColumn} = $1 
+            WHERE id = (
+                SELECT person_id 
+                FROM person_security 
+                WHERE root_identity_hash = $2
+            )
+            RETURNING id
+        `, [payload, enclave_sig]);
+
+        // If no rows were updated, the Enclave Signature wasn't found in the DB.
+        if (syncResult.rows.length === 0) {
+            console.error(`[AUTH_FAIL] No record matched signature: ${enclave_sig.substring(0, 10)}...`);
+            return res.status(401).json({ error: "UNAUTHORIZED_ENCLAVE_SIGNATURE" });
+        }
+
+        const personId = syncResult.rows[0].id;
+
+        // 2. NEUTRALIZE DEADLOCK
+        // Reset security counters for the identified person.
+        await pool.query(`
+            UPDATE person_security 
+            SET failed_login_attempts = 0, 
+                locked_until = NULL 
+            WHERE person_id = $1
+        `, [personId]);
+
+        res.json({ 
+            success: true, 
+            message: "IDENTITY_CONSUMED_AND_SYNCED",
+            id_vector: enclave_sig.substring(0, 8) 
+        });
+
+    } catch (err) {
+        console.error(`[SYS_ERR] ${err.message}`);
+        res.status(500).json({ error: "SOVEREIGN_SYNC_FAULT" });
     }
 });
 

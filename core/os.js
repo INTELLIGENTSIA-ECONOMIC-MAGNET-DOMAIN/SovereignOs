@@ -12,9 +12,20 @@ import { startBootSequence } from './boot.js'; // Refined boot sequence
 import { VFSManager } from "../system/vfs/vfs-manager.js";
 import { MemoryDriver } from "../system/vfs/drivers/memory-driver.js";
 import { ProcDriver } from '../system/vfs/drivers/proc-driver.js';
+import { UplinkController } from './uplink.js';
 
 class TLC_Kernel {
     constructor() {
+        // --- SECURITY FIRST: Check for Deadlock State on Boot ---
+        const currentLoops = parseInt(localStorage.getItem('vpu_loop_count') || 0);
+        if (currentLoops > 0) {
+            // Force immediate lockdown upon boot if a deadlock was active
+            window.addEventListener('load', () => {
+                if (this.deadlock) {
+                    this.deadlock.executeLockdown("REBOOT_DURING_DEADLOCK_PROHIBITED");
+                }
+            });
+        }
 
         // 1. Initialize the Core VFS Manager first
         this.vfs = new VFSManager(this);
@@ -444,6 +455,29 @@ class TLC_Kernel {
         this.mintQueue = JSON.parse(localStorage.getItem('vpu_mint_queue')) || [];
     }
 
+    // --- SOVEREIGN UPLINK CONTROLLER ---
+    async initiateHandshake(credentials) {
+    // 1. Generate a 6-digit VPU Token
+    const vpuToken = Math.floor(100000 + Math.random() * 900000);
+    this.expectedToken = vpuToken;
+
+    // 2. Trigger the "Uplink Glow" Visuals
+    const loginBox = document.querySelector('.login-box');
+    if (loginBox) loginBox.classList.add('uplink-glow');
+
+    // 3. Transmit via Uplink
+    const success = await UplinkController.transmit({
+        type: 'AUTH_HANDSHAKE',
+        message: `Secure Handshake Requested.\nToken: ${vpuToken}\nOrigin: ${window.location.hostname}`,
+        critical: true
+    });
+
+    if (!success) {
+        this.lastAuthError = "NETWORK_UPLINK_REJECTED";
+        this.handleAuthFailure(); // This triggers your impact-shake animation
+    }
+}
+
     // --- ADD THIS METHOD: The Kernel's "Identity Sensor" ---
     async getKernelFingerprint() {
         try {
@@ -638,10 +672,12 @@ async verifySecurityPerimeter() {
         }
     }  
 
-async attemptLogin(id, pass) {
+async attemptLogin(id, pass, enclaveSig, ownerNumber) {
     try {
         // Capture THIS machine's unique hardware signature
         const hwSig = await this.getHardwareEntropy();
+        // Ensure we never send the literal string "null" or "undefined"
+        const activeSig = enclaveSig || localStorage.getItem('TLC_ENCLAVE_MASTER_KEY') || "";
 
         const response = await fetch('http://localhost:3000/api/vpu/login', {
             method: 'POST',
@@ -650,7 +686,10 @@ async attemptLogin(id, pass) {
                 username: id,             // Matches 'user_name' in SQL
                 password: pass,           // Matches server variable
                 machineFingerprint: hwSig, // Matches server variable
-                ipAddress: "127.0.0.1"    // Explicitly provided
+                hwSig: hwSig,
+                ipAddress: "127.0.0.1",   // Explicitly provided
+                enclave_sig: activeSig, // <--- SENDING THE SIGNATURE
+                owner_number: ownerNumber
             })
         });
 
@@ -659,7 +698,7 @@ async attemptLogin(id, pass) {
         if (data.success) {
             // Success: Server verified credentials + hardware
             localStorage.setItem('vpu_last_auth', Date.now());
-            await this.transitionToShell(id, pass);
+            //await this.transitionToShell(id, pass);
             return true;
         } else {
             this.lastAuthError = data.message;
@@ -709,7 +748,9 @@ async getSecurityBinding() {
 
     return { fingerprint, ip };
 }
-    // For testing new Apps by Devs
+    
+
+// For testing new Apps by Devs
 
         executeTemporary(code, manifest) {
             const tempId = `live-view-${Date.now()}`;
@@ -1802,6 +1843,8 @@ async showProvisioningUI() {
         const data = await res.json();
 
         if (data.success) {
+            // --- Bind the signature to LocalStorage immediately ---
+            localStorage.setItem('TLC_ENCLAVE_MASTER_KEY', data.certificate);
             // Generate the Enclave Certificate Object
             const enclaveCert = {
                 type: "VPU_ENCLAVE_KEY",
@@ -1849,7 +1892,12 @@ async showProvisioningUI() {
                 const content = event.target.result;
 
                 // Validate JSON format
-                JSON.parse(content);
+                const certData = JSON.parse(content); // Parse the file content
+                // --- Extract signature from the uploaded file ---
+                if (certData.signature) {
+                    localStorage.setItem('TLC_ENCLAVE_MASTER_KEY', certData.signature);
+                    console.log("» VPU_ENCLAVE: Signature extracted and bound.");
+                }
 
                 localStorage.setItem('VPU_PHYSICAL_KEY', content);
                 localStorage.setItem('VPU_HW_ID', "SIG_2025_12_26_ALPHA_GENESIS");

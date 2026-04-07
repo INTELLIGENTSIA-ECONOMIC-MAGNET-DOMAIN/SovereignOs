@@ -121,3 +121,14 @@ body, html {
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
 }
+
+/* --- UPLINK NOTIFICATION AREA --- */
+@keyframes pulse-glow {
+    0% { box-shadow: 0 0 5px #00ff41; border-color: #00ff41; }
+    50% { box-shadow: 0 0 25px #00ff41; border-color: #00ff41; }
+    100% { box-shadow: 0 0 5px #00ff41; border-color: #00ff41; }
+}
+
+.uplink-glow {
+    animation: pulse-glow 1.5s infinite ease-in-out;
+}

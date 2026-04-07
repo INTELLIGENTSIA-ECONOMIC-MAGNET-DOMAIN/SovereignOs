@@ -44,26 +44,29 @@ export class NativeDriver {
             console.log(`[NATIVE_DRIVER]: Provisioning complete for ${identity}`);
         } catch (e) {
             console.error(`[NATIVE_DRIVER]: Provisioning failed for ${identity}:`, e);
+            throw e; // Re-throw so auth.js knows it failed
+        } finally {
+            // RESTORE IDENTITY: Return to the standard user session
+            vfs.setActiveUser(identity);
         }
     }
-
     /**
      * Template Generator (Matches FilesApp requirement)
      */
     getOfficialLetterTemplate(id) {
         return `SOVEREIGN_ADMINISTRATION // NATIVE_PROVISIONING
-CLASSIFICATION: RESTRICTED // THEALCOHESION_CORE
-------------------------------------------
-DATE: ${new Date().toLocaleDateString()}
-REF_ID: NAT_ALLOT_100MB_${Math.floor(Math.random() * 1000)}
+        CLASSIFICATION: RESTRICTED // THEALCOHESION_CORE
+        ------------------------------------------
+        DATE: ${new Date().toLocaleDateString()}
+        REF_ID: NAT_ALLOT_100MB_${Math.floor(Math.random() * 1000)}
 
-SUBJECT: INITIAL_STORAGE_ALLOTMENT_DECREE
+        SUBJECT: INITIAL_STORAGE_ALLOTMENT_DECREE
 
-1. PROVISION: Total 100.00 MB Mesh Storage.
-2. ELIGIBILITY: Verified Natives of Thealcohesion.
-3. PROTOCOL: Managed via EPOS v2.0.
+        1. PROVISION: Total 100.00 MB Mesh Storage.
+        2. ELIGIBILITY: Verified Natives of Thealcohesion.
+        3. PROTOCOL: Managed via EPOS v2.0.
 
-STAMP_AUTHORITY: TLC_KERNEL_V1.2.9
-DIGITAL_SIG: [NATIVE_ENCLAVE_VERIFIED]`;
-    }
-}
+        STAMP_AUTHORITY: TLC_KERNEL_V1.2.9
+        DIGITAL_SIG: [NATIVE_ENCLAVE_VERIFIED]`;
+            }
+        }
