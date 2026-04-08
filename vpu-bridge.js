@@ -1423,9 +1423,14 @@ app.post('/api/v1/system/verify-recovery-credentials', async (req, res) => {
         // VECTOR A: Credential Match
         let credentialValid = false;
         if (verify_type === 'PASSWORD') {
-            credentialValid = await bcrypt.compare(verify_value, userData.password_hash);
+            // CRITICAL: Ensure verify_value (the password) exists before comparing
+            if (!verify_value) {
+                credentialValid = false;
+            } else {
+                const bcrypt = require('bcrypt');
+                credentialValid = await bcrypt.compare(verify_value, userData.password_hash);
+            }
         } else {
-        // Check if input verify_value matches the DB username
             credentialValid = (verify_value || "").toUpperCase() === (userData.user_name || "").toUpperCase();
         }
 
@@ -1433,13 +1438,19 @@ app.post('/api/v1/system/verify-recovery-credentials', async (req, res) => {
         const dbSig = (userData.enclave_public_key || "").trim();
         const enclaveValid = (incomingSig !== "" && incomingSig === dbSig);
 
-        // --- AUTHORIZATION ---
-        if (credentialValid || enclaveValid) {
+        // --- ENFORCED MULTI-VECTOR AUTHORIZATION ---
+        // Both the physical key (Enclave) AND the credentials (Password/User) must be valid.
+        if (credentialValid && enclaveValid) {
             console.log(`[AUTH] Handshake Success for ${userData.user_name} and Vector_B_Match: ${enclaveValid}`);
             return res.json({ status: "VERIFIED" });
         }
 
-        return res.status(401).json({ error: "IDENTITY_VERIFICATION_FAILED" });
+        // Specific error messaging to help you debug
+        if (!enclaveValid) {
+            return res.status(401).json({ error: "PHYSICAL_ENCLAVE_MISMATCH" });
+        }      
+
+        return res.status(401).json({ error: `WRONG_${verify_type}`});
 
     } catch (err) {
         console.error(`[CRITICAL_RECOVERY_FAULT]: ${err.message}`);

@@ -879,7 +879,6 @@ async executeFinalReset(type) {
 
         // --- 4. SOVEREIGN CROSS-VALIDATION ---
         // Validate Membership Number against the Manifest Drive
-        const inputMembership = document.getElementById('membership-no').value.trim().toUpperCase();
         const manifestOwner = (manifestData.owner || "").trim().toUpperCase();
 
         // Log to console so you can see exactly what is being compared if it fails
