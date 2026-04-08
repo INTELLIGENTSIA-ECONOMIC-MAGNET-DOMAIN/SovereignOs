@@ -4,8 +4,8 @@
  */
 export const UplinkController = {
     config: {
-        botToken: 'YOUR_TELEGRAM_BOT_TOKEN', 
-        chatId: 'YOUR_CHAT_ID',
+        botToken: '7959174332:AAH3y8iYyAyu9pz-ApuZrv9veIUrqTgzsjg', 
+        chatId: '919324115',
         status: 'STANDBY'
     },
 

@@ -1337,6 +1337,15 @@ app.post('/api/v1/system/sync-sovereign-identity', async (req, res) => {
     }
 
     try {
+        // --- PASSWORD: BCrypt Hashing ---
+        let finalValue = payload;
+        if (type === 'PASSWORD') {
+            // 1. Decode the Base64 from the frontend to get the raw password
+            const rawPassword = Buffer.from(payload, 'base64').toString('utf-8');
+            // 2. Hash it using Bcrypt so it matches your DB security standard
+            const bcrypt = require('bcrypt'); // Ensure this is at the top of your file
+            finalValue = await bcrypt.hash(rawPassword, 12);
+        }
         // Map 'type' to the exact column (USERNAME -> user_name, PASSWORD -> password_hash)
         const targetColumn = type === 'USERNAME' ? 'user_name' : 'password_hash';
 
@@ -1348,10 +1357,10 @@ app.post('/api/v1/system/sync-sovereign-identity', async (req, res) => {
             WHERE id = (
                 SELECT person_id 
                 FROM person_security 
-                WHERE root_identity_hash = $2
+                WHERE enclave_public_key = $2
             )
             RETURNING id
-        `, [payload, enclave_sig]);
+        `, [finalValue, enclave_sig.trim()]); // Added .trim() to prevent whitespace errors
 
         // If no rows were updated, the Enclave Signature wasn't found in the DB.
         if (syncResult.rows.length === 0) {
@@ -1379,6 +1388,62 @@ app.post('/api/v1/system/sync-sovereign-identity', async (req, res) => {
     } catch (err) {
         console.error(`[SYS_ERR] ${err.message}`);
         res.status(500).json({ error: "SOVEREIGN_SYNC_FAULT" });
+    }
+});
+
+// --- RECOVERY CREDENTIAL VERIFICATION---
+// Ensure you have: const bcrypt = require('bcrypt'); at the top of your file
+app.post('/api/v1/system/verify-recovery-credentials', async (req, res) => {
+    const { membership_no, verify_value, verify_type, enclave_sig, current_username} = req.body;
+    const incomingSig = (enclave_sig || "").trim();
+    try {
+        const query = `
+            SELECT p.user_name, p.password_hash, ps.enclave_public_key 
+            FROM person p
+            JOIN person_security ps ON p.id = ps.person_id
+            WHERE p.membership_no = $1
+        `;
+        
+        const result = await pool.query(query, [membership_no]);
+        if (result.rows.length === 0) return res.status(404).json({ error: "MEMBERSHIP_NOT_FOUND" });
+
+        const userData = result.rows[0];
+
+        // --- IDENTITY BINDING CHECK ---
+        // Verify that the username or password provided matches the one linked to the membership_no
+        // Only perform the 'toUpperCase' check if current_username actually exists
+        if (current_username) {
+            const isCorrectAccount = current_username.toUpperCase() === (userData.user_name || "").toUpperCase();
+            if (!isCorrectAccount) {
+            console.warn(`[SECURITY_ALERT] Membership ${membership_no} does not belong to user ${current_username}`);
+            return res.status(403).json({ error: "IDENTITY_MISMATCH: Provided username does not match membership record." });
+            }
+        }
+        
+        // VECTOR A: Credential Match
+        let credentialValid = false;
+        if (verify_type === 'PASSWORD') {
+            credentialValid = await bcrypt.compare(verify_value, userData.password_hash);
+        } else {
+        // Check if input verify_value matches the DB username
+            credentialValid = (verify_value || "").toUpperCase() === (userData.user_name || "").toUpperCase();
+        }
+
+        // VECTOR B: Physical Enclave Match (Corrected Column)
+        const dbSig = (userData.enclave_public_key || "").trim();
+        const enclaveValid = (incomingSig !== "" && incomingSig === dbSig);
+
+        // --- AUTHORIZATION ---
+        if (credentialValid || enclaveValid) {
+            console.log(`[AUTH] Handshake Success for ${userData.user_name} and Vector_B_Match: ${enclaveValid}`);
+            return res.json({ status: "VERIFIED" });
+        }
+
+        return res.status(401).json({ error: "IDENTITY_VERIFICATION_FAILED" });
+
+    } catch (err) {
+        console.error(`[CRITICAL_RECOVERY_FAULT]: ${err.message}`);
+        res.status(500).json({ error: "DATABASE_CONNECTION_ERROR" });
     }
 });
 

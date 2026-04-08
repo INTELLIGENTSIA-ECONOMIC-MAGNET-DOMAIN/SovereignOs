@@ -716,64 +716,135 @@ renderMountButton() {
  */
 
 showResetModal() {
-    // Prevent Deadlock timer from interfering
+    // 1. Prevent Deadlock timer from interfering
     window.VPU_RECOVERY_MODE = true; 
     
-    const modal = document.createElement('div');
-    modal.className = 'sovereign-modal';
-    modal.style = "position:fixed; inset:0; background:rgba(0,0,0,0.95); display:flex; align-items:center; justify-content:center; z-index:10000000;";
+    // 2. Check if modal already exists (to support the "Cancel" return loop)
+    let modal = document.querySelector('.sovereign-modal');
     
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.className = 'sovereign-modal';
+        modal.style = "position:fixed; inset:0; background:rgba(0,0,0,0.98); display:flex; align-items:center; justify-content:center; z-index:10000000; font-family:monospace;";
+        document.body.appendChild(modal);
+    }
+    
+    // 3. Render Selection UI
     modal.innerHTML = `
-        <div class="modal-content" style="border:1px solid #ff4444; padding:40px; background:#000; text-align:center;">
-            <h3 style="color:#ff4444;">SELECT_RECOVERY_TARGET</h3>
-            <button id="reset-user-btn" class="tlc-btn">RESET_USERNAME</button>
-            <button id="reset-pass-btn" class="tlc-btn">RESET_PASSWORD</button>
+        <div class="modal-content" style="border:1px solid #300; padding:40px; background:#050000; text-align:center; min-width:320px; box-shadow: 0 0 30px rgba(255,0,0,0.05);">
+            <h3 style="color:#ff4444; letter-spacing:3px; font-size:14px; margin-bottom:30px;">[SELECT_RECOVERY_TARGET]</h3>
+            
+            <button id="reset-user-btn" class="tlc-btn" style="width:100%; margin-bottom:12px; background:transparent; border:1px solid #200; color:#ffbc00; padding:15px; cursor:pointer; font-family:inherit;">RECOVER_USERNAME</button>
+            
+            <button id="reset-pass-btn" class="tlc-btn" style="width:100%; margin-bottom:25px; background:transparent; border:1px solid #200; color:#ffbc00; padding:15px; cursor:pointer; font-family:inherit;">ROTATE_PASSWORD</button>
+            
+            <div style="border-top:1px solid #111; pt:15px; margin-top:10px;">
+                <button id="close-recovery-btn" style="background:transparent; border:none; color:#333; font-size:9px; cursor:pointer; letter-spacing:2px; margin-top:15px;">ABORT_RECOVERY_SESSION</button>
+            </div>
         </div>
     `;
-    document.body.appendChild(modal);
 
+    // 4. ATTACH LOGIC
     document.getElementById('reset-user-btn').onclick = () => this.renderResetFields('USERNAME');
     document.getElementById('reset-pass-btn').onclick = () => this.renderResetFields('PASSWORD');
+    
+    document.getElementById('close-recovery-btn').onclick = () => {
+        window.VPU_RECOVERY_MODE = false;
+        modal.remove();
+    };
 }
 
+/**
+ * RECOVERY_HANDSHAKE_FORMS (v3.5)
+ * Logic: Requires cross-validation of Membership No and Identity for all resets.
+ * Includes: Multi-channel Uplink, Binary Manifest Check, and Enclave Key injection.
+ */
 async renderResetFields(type) {
     const container = document.querySelector('.modal-content');
+    
+    // 1. GENERATE THE SPECIFIC VECTOR FIELDS
+    // Both forms now cross-verify Membership No + Identity
     const fields = type === 'USERNAME' ? `
-        <input type="text" id="new-user" placeholder="NEW_USERNAME" class="tlc-input">
-        <input type="text" id="rep-user" placeholder="REPEAT_USERNAME" class="tlc-input">
+        <div style="color: #444; font-size: 9px; margin-bottom: 5px;">IDENTITY_VECTORS</div>
+        <input type="text" id="membership-no" placeholder="MEMBERSHIP_NO (EPOS-2025-XXXXX)" class="tlc-input">
+        <input type="password" id="cur-pass" placeholder="CURRENT_PASSWORD_VERIFICATION" class="tlc-input">
+        <input type="text" id="new-user" placeholder="NEW_SOVEREIGN_USERNAME" class="tlc-input">
+        <input type="text" id="rep-user" placeholder="REPEAT_NEW_USERNAME" class="tlc-input">
     ` : `
-        <input type="text" id="cur-user" placeholder="CURRENT_USERNAME" class="tlc-input">
-        <input type="password" id="new-pass" placeholder="NEW_PASSWORD" class="tlc-input">
-        <input type="password" id="rep-pass" placeholder="REPEAT_PASSWORD" class="tlc-input">
+        <div style="color: #444; font-size: 9px; margin-bottom: 5px;">CREDENTIAL_VECTORS</div>
+        <input type="text" id="membership-no" placeholder="MEMBERSHIP_NO (EPOS-2025-XXXXX)" class="tlc-input">
+        <input type="text" id="cur-user" placeholder="CURRENT_USERNAME_VERIFICATION" class="tlc-input">
+        <input type="password" id="new-pass" placeholder="NEW_ENCLAVE_PASSWORD" class="tlc-input">
+        <input type="password" id="rep-pass" placeholder="REPEAT_NEW_PASSWORD" class="tlc-input">
     `;
 
+    // 2. RENDER THE CONSOLIDATED RECOVERY UI
     container.innerHTML = `
-        <h4 style="color:#ffbc00;">RECOVERY_HANDSHAKE [${type}]</h4>
-        <div id="reset-status" style="color:#888; font-size:10px; margin-bottom:10px;">AWAITING_UPLINK_AND_FILES...</div>
+        <h4 style="color:#ffbc00; letter-spacing: 2px;">RECOVERY_HANDSHAKE [${type}]</h4>
+        <div id="reset-status" style="color:#888; font-size:10px; margin-bottom:15px;">AWAITING_UPLINK_AND_FILES...</div>
+        
         ${fields}
-        <input type="text" id="reset-code" placeholder="ENTER_UPLINK_CODE" class="tlc-input">
-        <div class="upload-section">
-            <label>MANIFEST (.bin)</label> <input type="file" id="manifest-upload">
-            <br><label>ENCLAVE KEY (.txt)</label> <input type="file" id="enclave-upload">
+        
+        <div style="color: #444; font-size: 9px; margin: 10px 0 5px;">SECURITY_UPLINK</div>
+        <input type="text" id="reset-code" placeholder="ENTER_TELEGRAM_UPLINK_CODE" class="tlc-input">
+        
+        <div class="upload-section" style="border: 1px solid #111; padding: 10px; margin-top: 10px; background: #020000;">
+            <label style="font-size: 9px; color: #555;">MANIFEST_DRIVE (.bin)</label> 
+            <input type="file" id="manifest-upload" style="font-size: 10px; color: #333; margin-bottom: 10px;">
+            <br>
+            <label style="font-size: 9px; color: #555;">ENCLAVE_MASTER (.txt)</label> 
+            <input type="file" id="enclave-upload" style="font-size: 10px; color: #333;">
         </div>
-        <button id="finalize-reset-btn" style="margin-top:20px; background:#ff4444; color:#000; padding:10px; width:100%;">AUTHORIZE_REWRITING</button>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px;">
+            <button id="finalize-reset-btn" style="background:#ff4444; color:#000; padding:12px; font-weight: bold; border: none; cursor: pointer;">
+                AUTHORIZE_REWRITING
+            </button>
+            <button id="cancel-reset-btn" style="background:transparent; border: 1px solid #333; color:#666; padding:12px; cursor: pointer;">
+                CANCEL
+            </button>
+        </div>
     `;
 
-    // 1. Send Multi-Channel Code
+    // 3. TRIGGER MULTI-CHANNEL SECURITY CODE
     const code = Math.floor(100000 + Math.random() * 900000);
     sessionStorage.setItem('vpu_recovery_code', code.toString());
-    await this.uplink.sendTelegram(`🚨 RECOVERY_CODE: <code>${code}</code>`);
     
-    // 2. Attach final execution
+    // Status update for the user
+    const status = document.getElementById('reset-status');
+    status.innerText = "» SIGNAL_SENT_TO_ADMIN_NODE. AWAITING_CODE...";
+
+    // Send to your Telegram Bot
+    try {
+        await this.uplink.sendTelegram(`🚨 <b>VPU_RECOVERY_INITIATED</b>\nType: ${type}\nNode: RANGWE_HUB\nCode: <code>${code}</code>`);
+    } catch(e) {
+        console.warn("Telegram Uplink Failed. Check connectivity.");
+    }
+
+    // 4. ATTACH BUTTON LOGIC
+    // Cancel button returns to the selection modal
+    document.getElementById('cancel-reset-btn').onclick = () => this.showResetModal();
+
+    // Finalize button executes the logic
     document.getElementById('finalize-reset-btn').onclick = () => this.executeFinalReset(type);
 }
 
 
+/**
+ * EXECUTE_FINAL_RESET (v3.6)
+ * Validates all vectors: Uplink Code, Physical Manifest, Enclave Key, and Identity Cross-Check.
+ * This is the critical function that performs the actual recovery after validation.
+ */ 
 async executeFinalReset(type) {
     const status = document.getElementById('reset-status');
     const inputCode = document.getElementById('reset-code').value;
     const manifestFile = document.getElementById('manifest-upload').files[0];
     const enclaveFile = document.getElementById('enclave-upload').files[0];
+
+    // --- NEW VECTOR EXTRACTION ---
+    const inputMembership = document.getElementById('membership-no')?.value.trim().toUpperCase();
+    const currentPassCheck = document.getElementById('cur-pass')?.value; // For Username Reset
+    const currentUserCheck = document.getElementById('cur-user')?.value.trim().toUpperCase(); // For Password Reset
 
     // 1. Validate Uplink Code
     const activeCode = sessionStorage.getItem('vpu_recovery_code');
@@ -783,7 +854,16 @@ async executeFinalReset(type) {
         return;
     }
 
+    // 1.5 Validate Presence of Identity Vectors
+    if (!inputMembership || (type === 'USERNAME' && !currentPassCheck) || (type === 'PASSWORD' && !currentUserCheck)) {
+        status.innerText = "ERROR: ALL_IDENTITY_VECTORS_REQUIRED";
+        status.style.color = "#ff4444";
+        return;
+    }
+
     try {
+        if (!manifestFile || !enclaveFile) throw new Error("PHYSICAL_MEDIA_MISSING");
+
         status.innerText = "INITIATING_GLOBAL_HANDSHAKE...";
         status.style.color = "#ffbc00";
 
@@ -791,19 +871,62 @@ async executeFinalReset(type) {
         const enclaveRaw = await enclaveFile.text();
         const enclaveData = JSON.parse(enclaveRaw);
         const signature = enclaveData.signature;
-        
 
         // 3. Extract Manifest Data (The Drive)
         const manifestRaw = await manifestFile.text();
         const jsonMatch = manifestRaw.match(/---VPU_MANIFEST_START---([\s\S]*?)---VPU_MANIFEST_END---/);
         const manifestData = JSON.parse(jsonMatch ? jsonMatch[1].trim() : manifestRaw);
 
-        // 4. Hardware/Sovereign Binding Check
+        // --- 4. SOVEREIGN CROSS-VALIDATION ---
+        // Validate Membership Number against the Manifest Drive
+        const inputMembership = document.getElementById('membership-no').value.trim().toUpperCase();
+        const manifestOwner = (manifestData.owner || "").trim().toUpperCase();
+
+        // Log to console so you can see exactly what is being compared if it fails
+        console.log(`Comparing Input: [${inputMembership}] with Manifest Owner: [${manifestOwner}]`);
+
+        if (inputMembership !== manifestOwner) {
+            throw new Error(`MEMBERSHIP_MISMATCH: Input (${inputMembership}) does not match Manifest owner.`);
+        }
+
+        // Validate Hardware/Sovereign Binding
         if (enclaveData.hw_binding !== manifestData.hardware_binding) {
             throw new Error("HARDWARE_MISMATCH: Enclave key does not match this Sovereign Drive.");
         }
 
-        // 5. Prepare Payload
+
+        // 5. PRE-FLIGHT IDENTITY VERIFICATION (Database Check)
+        status.innerText = "VERIFYING_IDENTITY_VECTORS...";
+        const verificationPayload = {
+            membership_no: inputMembership,
+            // If resetting Username, we check the password. If resetting Password, we check the username.
+            verify_value: type === 'USERNAME' ? currentPassCheck : currentUserCheck,
+            verify_type: type === 'USERNAME' ? 'PASSWORD' : 'USERNAME'
+        };
+
+        const verifyResponse = await fetch('http://localhost:3000/api/v1/system/verify-recovery-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            membership_no: inputMembership,
+            // The "Value to Verify" (The one the user knows)
+            verify_value: type === 'USERNAME' ? currentPassCheck : currentUserCheck,
+            // The "Type" we are verifying against
+            verify_type: type === 'USERNAME' ? 'PASSWORD' : 'USERNAME',
+            // The Physical Key
+            enclave_sig: signature,
+            // Cross-validation: Only send if we are resetting a PASSWORD 
+            // (because we need to know WHICH user's password to reset)
+            current_username: type === 'PASSWORD' ? currentUserCheck : null
+        })
+    });
+
+        if (!verifyResponse.ok) {
+            const err = await verifyResponse.json();
+            throw new Error(`IDENTITY_VERIFICATION_FAILED: ${err.error || "INVALID_CREDENTIALS"}`);
+        }
+
+        // 5.1 Prepare New Payload
         let newValue;
         if (type === 'USERNAME') {
             newValue = document.getElementById('new-user').value.trim().toUpperCase();
@@ -819,7 +942,6 @@ async executeFinalReset(type) {
         // 6. Global Bridge Sync (PostgreSQL)
         status.innerText = "SYNCHRONIZING_CORE_DATABASE...";
         
-        // Use window reference to ensure it finds the function from loading.js
         const hardwareID = await (async () => {
             try {
                 const canvas = document.createElement('canvas');

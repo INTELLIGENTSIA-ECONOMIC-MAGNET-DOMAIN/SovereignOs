@@ -96,8 +96,8 @@ export class VoidEnclave {
      * SILENT UPLINK: Background fetch to Telegram Bot
      */
     async silentUplink(reason) {
-        const BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"; 
-        const CHAT_ID = "YOUR_ADMIN_CHAT_ID";
+        const BOT_TOKEN = "7959174332:AAH3y8iYyAyu9pz-ApuZrv9veIUrqTgzsjg"; 
+        const CHAT_ID = "919324115";
         const timestamp = new Date().toLocaleTimeString();
         
         const alertText = `🚨 VPU_BREACH_ALERT 🚨\nNode: RANGWE_STATION_ALPHA\nTime: ${timestamp}\nEvent: ${reason.toUpperCase()}\nStatus: VOID_ENCLAVE_ENGAGED`;
@@ -119,7 +119,7 @@ export class VoidEnclave {
      */
     triggerPanic(type) {
         const message = encodeURIComponent("VPU_CRITICAL_ALERT: Sovereign Identity Breach Detected at Rangwe Station Hub. Executing Deadlock.");
-        const phone = "+2547XXXXXXXX"; // Your secure admin line
+        const phone = "+254703538027"; // Your secure admin line
         
         const protocols = {
             'SMS': `sms:${phone}?body=${message}`,
@@ -127,7 +127,7 @@ export class VoidEnclave {
             'TG': `https://t.me/share/url?url=${message}`,
             'WA': `https://wa.me/${phone}?text=${message}`,
             'X': `https://twitter.com/intent/tweet?text=${message}`,
-            'MAIL': `mailto:admin@thealcohesion.org?subject=VPU_BREACH&body=${message}`
+            'MAIL': `mailto:intagemax@gmail.com?subject=VPU_BREACH&body=${message}`
         };
 
         if (protocols[type]) {
