@@ -15,6 +15,8 @@ import { ProcDriver } from '../system/vfs/drivers/proc-driver.js';
 import { UplinkController } from './uplink.js';
 
 class TLC_Kernel {
+    //Private fields (Using # for true privacy in modern JS) FOR PASSWORDS AND KEYS - NEVER STORE THESE IN PLAIN TEXT
+    #enclaveKey = null;
     constructor() {
         // --- SECURITY FIRST: Check for Deadlock State on Boot ---
         const currentLoops = parseInt(localStorage.getItem('vpu_loop_count') || 0);
@@ -455,6 +457,18 @@ class TLC_Kernel {
         this.mintQueue = JSON.parse(localStorage.getItem('vpu_mint_queue')) || [];
     }
 
+    // --- SECURE KEY METHODS ---
+    setSystemKey(pass) { 
+        this.#enclaveKey = pass; 
+        // We also set the legacy property for backward compatibility 
+        // with your existing logic, but #enclaveKey is the "Truth".
+        this.systemPassword = pass; 
+    }
+
+    verifyKey(attempt) { 
+        return attempt === this.#enclaveKey; 
+    }
+
     // --- SOVEREIGN UPLINK CONTROLLER ---
     async initiateHandshake(credentials) {
     // 1. Generate a 6-digit VPU Token
@@ -478,7 +492,7 @@ class TLC_Kernel {
     }
 }
 
-    // --- ADD THIS METHOD: The Kernel's "Identity Sensor" ---
+    // --- The Kernel's "Identity Sensor" ---
     async getKernelFingerprint() {
         try {
             const canvas = document.createElement('canvas');
@@ -2104,12 +2118,14 @@ async runRecoverySequence(errorCode) {
         });        
 }
 
+/**
+ * This version ensures that the password typed into the box is hashed before being compared to this.systemPassword, which is the sovereign best practice for an Enclave.
+ */
 async unlockSystem() {
     const lockPass = document.getElementById('lock-pass-input');
     const status = document.getElementById('lock-status');
     const lockScreen = document.getElementById('lock-screen');
-    const lockBox = lockScreen?.querySelector('.lock-box');
-    const root = document.getElementById('os-root');
+    const osRoot = document.getElementById('os-root');
 
     // 1. Safety Check
     if (!lockPass || lockPass.value === "") {
@@ -2117,68 +2133,82 @@ async unlockSystem() {
         return;
     }
 
-    // 2. UI Feedback
-    status.innerText = ">> INITIATING_DECRYPTION_HANDSHAKE...";
+    const inputRaw = lockPass.value;
+    status.innerText = ">> DECRYPTING_ENCLAVE_HANDSHAKE...";
     status.style.color = "#a445ff";
     lockPass.disabled = true;
 
-    // 3. Simulated Kernel Processing
-    await new Promise(r => setTimeout(r, 1000));
+    try {
+        // 2. SOVEREIGN HASHING: Convert input to SHA-256
+        const encoder = new TextEncoder();
+        const data = encoder.encode(inputRaw);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const enteredKeyHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
-    // 4. AUTHENTICATION LOGIC
-    // Determine your correct key (Checking against 'admin' OR a stored system pass)
-    const correctKey = this.systemPassword || "admin"; 
-    
-    if (lockPass.value === correctKey) {
-        // --- SUCCESS SEQUENCE ---
-        status.innerText = ">> SIGNATURE_VALID // ENCLAVE_RESUMING";
-        status.style.color = "#a445ff";
-        
-        // Update Internal State Immediately
-        this.isLocked = false; 
+        // 3. AUTHENTICATION CHECK
+        // If this.systemPassword isn't set, it falls back to a hashed "admin" for safety
+        const correctKeyHash = this.systemPassword || "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"; 
 
-        if (lockBox) lockBox.style.boxShadow = "0 0 100px rgba(164, 69, 255, 0.4)";
+        if (enteredKeyHash === correctKeyHash) {
+            // --- SUCCESS SEQUENCE ---
+            status.innerText = ">> SIGNATURE_MATCHED // RESUMING_SHELL";
+            status.style.color = "#00ff41";
 
-        // 5. Force UI Reveal
-        if (lockScreen) {
-            lockScreen.style.transition = "opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1), backdrop-filter 0.8s";
-            lockScreen.style.opacity = '0';
-            lockScreen.style.pointerEvents = 'none'; // Stop intercepting clicks
-        }
+            // A. Clear Security Flags
+            this.isLocked = false;
+            this.isPanicked = false;
 
-        if (root) {
-            root.style.display = "block"; // Ensure it exists in DOM
-            root.style.filter = "none"; 
-            root.style.opacity = "1";
-        }
+            // B. Re-sync Hardware Binding
+            const binding = await this.getSecurityBinding();
+            if (this.currentUser) {
+                this.currentUser.bound_machine_id = binding.fingerprint;
+            }
 
-        // Final Cleanup
-        setTimeout(() => {
+            // C. UI Reveal Sequence (The "revealOS" logic)
             if (lockScreen) {
-                lockScreen.classList.add('hidden');
-                lockScreen.style.display = 'none';
+                lockScreen.style.transition = "opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1)";
+                lockScreen.style.opacity = '0';
+                lockScreen.style.pointerEvents = 'none';
+                setTimeout(() => {
+                    lockScreen.classList.add('hidden');
+                    lockScreen.style.display = 'none';
+                    this.resetLockScreenUI();// Prepare for next lock without residual data
+                }, 600);
             }
-            lockPass.value = ""; 
+
+            if (osRoot) {
+                osRoot.style.display = 'grid'; 
+                osRoot.style.filter = 'none';
+                osRoot.style.opacity = '1';
+                osRoot.style.pointerEvents = 'all';
+            }
+
+            // D. Re-assert Fullscreen
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen().catch(() => {});
+            }
+
+            this.logEvent('SEC', 'Enclave Re-opened: Local Signature Verified.');
+            lockPass.value = "";
             lockPass.disabled = false;
-            
-            // Restore EPOS/Investor Session Brightness
-            if (typeof this.setBrightness === 'function' && this.currentBrightness) {
-                this.setBrightness(this.currentBrightness);
-            }
-            
-            console.log("Kernel: Sovereign Enclave Resumed.");
-        }, 800);
 
-    } else {
-        // --- FAILURE SEQUENCE ---
-        status.innerText = ">> CRITICAL: KEY_SIGNATURE_REJECTED";
-        status.style.color = "#ff003c";
-        
-        this.triggerLockShake();
+        } else {
+            // --- FAILURE SEQUENCE ---
+            status.innerText = ">> ACCESS_DENIED: INVALID_ENCLAVE_KEY";
+            status.style.color = "#ff003c";
+            
+            this.triggerLockShake();
+            this.logEvent('WARN', 'Unauthorized Lock Screen Attempt.');
 
-        lockPass.value = "";
+            lockPass.value = "";
+            lockPass.disabled = false;
+            lockPass.focus();
+        }
+    } catch (err) {
+        console.error("UNLOCK_FAULT:", err);
+        status.innerText = ">> KERNEL_ERROR: CRYPTO_FAILURE";
         lockPass.disabled = false;
-        lockPass.focus();
     }
 }
 
@@ -2188,6 +2218,32 @@ triggerLockShake() {
     if (lockBox) {
         lockBox.classList.add('impact-shake');
         setTimeout(() => lockBox.classList.remove('impact-shake'), 400);
+    }
+}
+
+/**
+ * PURGE & RESET: Ensures the lock screen is clean for the next use
+ */
+resetLockScreenUI() {
+    const status = document.getElementById('lock-status');
+    const lockPass = document.getElementById('lock-pass-input');
+    const lockScreen = document.getElementById('lock-screen');
+
+    if (status) {
+        status.innerText = "STANDBY: ENCLAVE_LOCKED";
+        status.style.color = "#888"; // Reset to neutral color
+    }
+
+    if (lockPass) {
+        lockPass.value = "";
+        lockPass.disabled = false;
+        lockPass.style.boxShadow = "none";
+    }
+
+    if (lockScreen) {
+        // Ensure it's ready to accept clicks the next time it's shown
+        lockScreen.style.pointerEvents = 'all'; 
+        lockScreen.style.zIndex = '999999';
     }
 }
 
@@ -2222,11 +2278,16 @@ triggerLockShake() {
             return;
         }
         // FORCING FULLSCREEN LOCK
-        const docElm = document.documentElement;
-        if (docElm.requestFullscreen) {
-            docElm.requestFullscreen();
-        } else if (docElm.webkitRequestFullscreen) { /* iOS/Safari */
-            docElm.webkitRequestFullscreen();
+        try {
+            const docElm = document.documentElement;
+            if (!document.fullscreenElement) { // Only request if we aren't already there
+                docElm.requestFullscreen?.().catch(e => {
+                    // We log it as a 'system note' rather than a 'fault'
+                    this.logEvent('SYS', 'UI_EXPANSION_DEFERRED: Windowed mode active.');
+                });
+            }
+        } catch (e) {
+            console.warn("KERNEL_BOOT: Fullscreen auto-transition skipped.");
         }
 
         // LOCKING ORIENTATION (Mobile)
@@ -2326,6 +2387,7 @@ triggerLockShake() {
         `;
         workspace.appendChild(preview);
     }
+    
     }
 
    async getGeolocation() {
@@ -2840,46 +2902,49 @@ setTheme(themeName) {
 }
 
 // SECURITY PROTOCOL: LOCK SYSTEM
+// core/os.js
 lockSystem() {
-    console.warn("Kernel: SECURITY PROTOCOL ACTIVE. Purging Session Key...");
+    this.isLocked = true;
+    const lockScreen = document.getElementById('lock-screen');
+    const osRoot = document.getElementById('os-root');
 
-    // 1. SHRED DATA
-    this.sessionKey = null;
-
-    // 2. WIPE DOM (Kill all apps)
-    Object.keys(this.runningApps).forEach(appId => {
-        this.killProcess(appId);
-    });
-
-    // 3. UI RESET
-    const gate = document.getElementById('login-gate');
-    const root = document.getElementById('os-root');
-    const top = document.getElementById('top-bar');
-    const passInput = document.getElementById('pass-input');
-    const status = document.getElementById('auth-status');
-
-    if (gate) {
-        gate.style.display = 'flex';
-        gate.style.opacity = '1';
-        // Notify the user that the purge was successful
-        if (status) {
-            status.innerText = "SESSION_PURGED: MEMORY_CLEAN";
-            status.style.color = "#ff4444"; // Red alert color
+    if (lockScreen) {
+        lockScreen.classList.remove('hidden');
+        lockScreen.style.display = 'flex';
+        lockScreen.style.opacity = '1';
+        
+        // Ensure the lock screen can actually receive mouse clicks and typing
+        lockScreen.style.pointerEvents = 'all'; 
+        lockScreen.style.zIndex = '9999999'; // Ensure it sits above everything
+        
+        // Refocus the input automatically so the user can just start typing
+        const lockInput = document.getElementById('lock-pass-input');
+        if (lockInput) {
+            lockInput.disabled = false; // Ensure it's not stuck from a previous attempt
+            lockInput.value = "";
+            setTimeout(() => {
+                lockInput.focus();
+                // If it's still not focusing, force click it
+                lockInput.click();
+            }, 100);
         }
     }
-    
-    if (root) root.style.display = 'none';
-    if (top) top.classList.add('hidden');
-    
-    // 4. SECURITY HYGIENE
-    if (passInput) passInput.value = ''; 
+
+    if (osRoot) {
+        osRoot.style.filter = "blur(15px) brightness(0.2)";
+        // prevent clicks from passing through to the desktop apps
+        osRoot.style.pointerEvents = 'none';
+    }
+
+    this.logEvent('SECURITY', 'Sovereign Enclave Suspended.');
+}
+
+// This is a more destructive option that simulates a full shutdown by clearing session data and reloading the page
+terminateAndPurge() {
+    console.warn("Kernel: PURGING_ALL_MEM_STRUCTURES...");
+    this.sessionKey = null;
     this.isLoggedIn = false;
-
-    // Optional: Re-trigger the Pulse FX to show Sentry is still watching
-    const pulse = document.querySelector('.pulse-container');
-    if (pulse) pulse.style.display = 'block';
-
-    console.log("Kernel: System Enclave Locked and Purged.");
+    location.reload(); // Hard reset
 }
 
 suspendSession() {

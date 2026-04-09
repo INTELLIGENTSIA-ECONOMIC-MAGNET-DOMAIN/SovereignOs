@@ -69,6 +69,13 @@ export class SovereignAuth {
 
         // Reset the button state on activation
         btn.onclick = async () => {
+            // 1. Prime Fullscreen immediately on click (while gesture is fresh)
+            try {
+                document.documentElement.requestFullscreen().catch(() => {
+                    /* Silent fail - we will try again in transitionToShell */
+                });
+            } catch(e) {}
+            // 2. Extract credentials directly from the DOM (This is the "Sniffer Ingress")
             const userField = document.getElementById('username');
             const passField = document.getElementById('pass-input');
             
@@ -82,7 +89,7 @@ export class SovereignAuth {
                 return;
             }
 
-            // Execute the combined sequence
+            // 3. Execute the combined sequence
             await this.handleHandshake(credentials);
         };
     // Ensure the secret ingress is wired if the logo exists
@@ -254,6 +261,17 @@ setupSecretIngress() {
             setTimeout(() => box.classList.remove('impact-shake'), 500);
 
         try {
+            // --- INSERT THE SOVEREIGN LOGIN LOGIC HERE ---
+            // We do this NOW so the hash is ready for the Lock Screen later
+            const encoder = new TextEncoder();
+            const data = encoder.encode(creds.pass); // Using the password from the creds object
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const localKey = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+            // Store the HASHED key in Kernel Memory (Never the plain text)
+            this.kernel.systemPassword = localKey;
+            // ----------------------------------------------
             // 3. Visual Cryptographic Sequence
             const sequence = [
                 { msg: "» REQUESTING_HANDSHAKE...", delay: 600 },
@@ -287,7 +305,29 @@ setupSecretIngress() {
                 status.innerHTML = `<span style="color: #bcff00;">ACCESS_GRANTED. INITIALIZING_SHELL...</span>`;
                 loginBtn.innerHTML = `<span class="btn-text">UPLINK ACCEPTED</span>`;
                 box.style.borderColor = '#bcff00';
+                try {
+                    const machineId = await this.kernel.getMachineId();
+                    const response = await fetch('https://your-api.com/v1/uplink/verify', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            auth: localKey, 
+                            device: machineId,
+                            user: inputUsername 
+                        })
+                    });
 
+                    if (response.ok) {
+                        const session = await response.json();
+                        this.kernel.sessionKey = session.token; 
+                    } else {
+                        throw new Error("UPLINK_REJECTED");
+                    }
+                } catch (e) {
+                    console.warn("Uplink Offline: Operating in Local Enclave mode.");
+                    // Fallback: This key will be used by enclaveBridge for VFS access
+                    this.kernel.sessionKey = 'LOCAL_VOLATILE_ENCLAVE_' + localKey.substring(0, 8);
+                }
                 // --- PHASE 1: INGRESS OBSERVATION ---
                 const observation = await this.sniffer.observe(creds);
 
@@ -738,7 +778,7 @@ showResetModal() {
             
             <button id="reset-pass-btn" class="tlc-btn" style="width:100%; margin-bottom:25px; background:transparent; border:1px solid #200; color:#ffbc00; padding:15px; cursor:pointer; font-family:inherit;">ROTATE_PASSWORD</button>
             
-            <div style="border-top:1px solid #111; pt:15px; margin-top:10px;">
+            <div style="border-top:1px solid #111; padding-top:15px; margin-top:10px;">
                 <button id="close-recovery-btn" style="background:transparent; border:none; color:#333; font-size:9px; cursor:pointer; letter-spacing:2px; margin-top:15px;">ABORT_RECOVERY_SESSION</button>
             </div>
         </div>
@@ -989,6 +1029,15 @@ async executeFinalReset(type) {
         
         status.innerHTML = "<span style='color: #00ff41;'>SYNC_COMPLETE. REBOOTING KERNEL...</span>";
         
+        // Request fullscreen here, BEFORE the timeout, while the click event is still fresh
+        try {
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen();
+            }
+        } catch (fsErr) {
+            console.warn("FULLSCREEN_AUTO_BOOT_SKIPPED:", fsErr.message);
+        }
+
         setTimeout(() => {
             window.VPU_RECOVERY_MODE = false;
             location.replace(window.location.pathname); 
