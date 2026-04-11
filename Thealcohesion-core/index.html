@@ -149,6 +149,15 @@
             BIO_METRIC_SCAN: [ ACCESS_WAITING ]
         </div>
 
+        <div class="proximity-perimeter" style="margin-bottom: 15px; border: 1px solid #a445ff22; padding: 5px; background: rgba(164,69,255,0.05);">
+            <div id="ble-status" style="font-size: 9px; color: #a445ff; letter-spacing: 2px; text-transform: uppercase;">
+                PROXIMITY_LINK: [ DISCONNECTED ]
+            </div>
+            <div style="width: 100%; height: 2px; background: #1a1a1a; margin-top: 4px;">
+                <div id="ble-bar" style="width: 0%; height: 100%; background: #a445ff; transition: width 0.3s ease;"></div>
+            </div>
+        </div>
+
         <div style="margin-top: 45px; border-top: 1px solid #1a1a1a; padding-top: 20px;">
             <a href="#" onclick="kernel.terminateAndPurge()" class="purge-link">
                 [!] TERMINATE_SESSION_AND_PURGE_MEMORY

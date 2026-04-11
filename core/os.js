@@ -18,6 +18,34 @@ class TLC_Kernel {
     //Private fields (Using # for true privacy in modern JS) FOR PASSWORDS AND KEYS - NEVER STORE THESE IN PLAIN TEXT
     #enclaveKey = null;
     constructor() {
+
+        // BRIDGE CONNECTION: This is the critical link to your hardware sniffer (vpu-bridge.js)
+        this.vpuBridgeSocket = new WebSocket('ws://localhost:3000'); 
+
+        // Add an error logger to help us debug
+        this.vpuBridgeSocket.onerror = (err) => {
+            console.error("» KERNEL_FAULT: Bridge Connection Failed. Is vpu-bridge.js running?");
+        };
+
+        this.vpuBridgeSocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                // Handle the new challenge type
+                if (data.type === 'AUTH_CHALLENGE') {
+                    console.log("» KERNEL: Bridge Challenge Received:", data.challenge);
+                    // Optionally respond to challenge here
+                    return; 
+                }
+
+                if (data.type === 'DEVICE_DISCOVERED') {
+                    console.log("» KERNEL: Device Found ->", data.name);
+                    this.emit('BT_DEVICE_FOUND', data);
+                }
+                
+                // ... rest of your logic
+            } catch (e) { console.error(e); }
+        };
         // --- SECURITY FIRST: Check for Deadlock State on Boot ---
         const currentLoops = parseInt(localStorage.getItem('vpu_loop_count') || 0);
         if (currentLoops > 0) {
@@ -52,6 +80,7 @@ class TLC_Kernel {
             version: "1.2.8"
         };
         
+        this.connectToBridge();// Establish the connection to the VPU Bridge for hardware interactions
         this.ledgerLocked = true;
         this.setupContextMenu();
         this.isTilingActive = false;
@@ -1477,7 +1506,7 @@ async shutdown() {
         },
 
         'settings': async (container) => {
-            const { SettingsApp } = await import('../apps/settings.js');
+            const { SettingsApp } = await import('./settings.js');
             
             // 1. Initialize process tracking
             this.activeProcesses = this.activeProcesses || {};
@@ -2972,6 +3001,70 @@ suspendSession() {
         root.style.opacity = "0.5";
     }
 }
+
+/**
+ * SOVEREIGN HARDWARE PAIRING
+ * Role: Triggers discovery mode on the bridge-sniffer and launches UI.
+ */
+initHardwarePairing() {
+    console.log("» KERNEL: Initializing Hardware Discovery...");
+    
+    // 1. Notify the user
+    this.notify("SCANNING", "Searching for nearby Sovereign devices...");
+
+    // 2. Send command to bridge-sniffer.js
+    if (this.vpuBridgeSocket && this.vpuBridgeSocket.readyState === WebSocket.OPEN) {
+        // Send the signal that vpu-bridge.js is now listening for
+        this.vpuBridgeSocket.send(JSON.stringify({ type: 'START_DISCOVERY' }));
+        this.notify("SCANNING", "Searching for physical anchors...");
+    } else {
+        console.error("» KERNEL_FAULT: Bluetooth Bridge Connection Offline.");
+        this.notify("BRIDGE_ERROR", "Could not connect to Hardware Sniffer.");
+        this.connectToBridge(); // Attempt to reconnect
+    }
+
+    // 3. Open the Settings app where the device list will appear
+    this.launchApp('settings'); 
+}
+
+// Attempt to reconnect to the bridge if it's offline
+connectToBridge() {
+    // Port 3000 is where your vpu-bridge.js now lives
+    this.vpuBridgeSocket = new WebSocket('ws://localhost:3000');
+
+    this.vpuBridgeSocket.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            
+            // 1. Discovery Logic (For the Settings App)
+            if (data.type === 'DEVICE_DISCOVERED') {
+                this.emit('BT_DEVICE_FOUND', data);
+            }
+
+            // 2. Proximity Logic (For System Tray & Security)
+            if (data.type === 'PROXIMITY_BEACON') {
+                // Update the Tray Icon color/signal strength
+                if (this.systemTray) {
+                    this.systemTray.updateBluetoothStatus(data.rssi);
+                }
+            }
+        } catch (e) {
+            console.error("Malformed Bridge Data:", e);
+        }
+    };
+
+    this.vpuBridgeSocket.onopen = () => {
+        console.log("» KERNEL: Unified Hardware Bridge Connected.");
+    };
+
+    this.vpuBridgeSocket.onclose = () => {
+        console.warn("» KERNEL: Bridge Connection Lost. Retrying...");
+        setTimeout(() => this.connectToBridge(), 5000);
+    };
+}
+
+
+// TOP BAR INTERACTIONS (Clock & Tiling Indicator)
     setupTopBarInteractions() {
         const topBarTime = document.getElementById('top-bar-time');
         

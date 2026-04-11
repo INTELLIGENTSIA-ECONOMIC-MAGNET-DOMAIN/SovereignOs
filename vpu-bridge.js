@@ -7,6 +7,11 @@ const cors = require('cors');
 // Entry point at login for VPU Access Verification
 const bcrypt = require('bcryptjs');
 
+// The VPU Bridge is responsible for securely communicating with the OS Kernel and handling all BLE interactions.
+const noble = require('@abandonware/noble');
+const WebSocket = require('ws');
+const crypto = require('crypto');
+
 const app = express();
 app.use(helmet());
 app.disable('x-powered-by');
@@ -1458,4 +1463,84 @@ app.post('/api/v1/system/verify-recovery-credentials', async (req, res) => {
     }
 });
 
+// ===== SOVEREIGN PROXIMITY BRIDGE =====
+// Configuration
+const SHARED_SECRET = process.env.VPU_HARDWARE_SECRET;
+let TARGET_MAC = process.env.TARGET_MAC || null; // Can be set dynamically now
+
+const server = app.listen(3000, () => {
+    console.log(`[VPU_CORE] Sovereign Bridge active on Port 3000`);
+});
+
+const startSovereignScan = () => {
+    console.log("» BRIDGE: Scanning...");
+    noble.startScanning([], true);
+};
+
+// Attach WebSocket to the same port
+const wss = new WebSocket.Server({ server });
+
+// 1. Move discovery logic OUTSIDE the connection block
+noble.on('discover', (peripheral) => {
+    const data = JSON.stringify({
+        type: 'DEVICE_DISCOVERED',
+        name: peripheral.advertisement.localName || "Unknown Node",
+        address: peripheral.address,
+        rssi: peripheral.rssi
+    });
+
+    // Broadcast to ALL connected clients
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(data);
+        }
+    });
+
+    // Handle Proximity for the specific anchor
+    if (TARGET_MAC && peripheral.address === TARGET_MAC) {
+        const hmac = crypto.createHmac('sha256', SHARED_SECRET);
+        hmac.update(`${peripheral.address}${peripheral.rssi}`);
+        const signature = hmac.digest('hex');
+
+        const beacon = JSON.stringify({
+            type: 'PROXIMITY_BEACON',
+            rssi: peripheral.rssi,
+            sig: signature,
+            timestamp: Date.now()
+        });
+
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) client.send(beacon);
+        });
+    }
+});
+
+// 2. Simplified Connection Block
+wss.on('connection', (ws) => {
+    console.log("» BRIDGE: Secure Handshake Link Established.");
+    
+    // Initial challenge
+    ws.send(JSON.stringify({ type: 'AUTH_CHALLENGE', challenge: crypto.randomBytes(16).toString('hex') }));
+
+    ws.on('message', (msg) => {
+        try {
+            const payload = JSON.parse(msg);
+            if (payload.type === 'START_DISCOVERY') {
+                // Check if it's already on using the string literal check
+                if (noble['state'] === 'poweredOn') { 
+                    startSovereignScan();
+                } else {
+                    // Wait for it to wake up
+                    noble.once('stateChange', (state) => {
+                        if (state === 'poweredOn') startSovereignScan();
+                    });
+                }
+            }
+            if (payload.type === 'SET_TARGET') {
+                TARGET_MAC = payload.address;
+                console.log(`» BRIDGE: Physical Anchor set to ${TARGET_MAC}`);
+            }
+        } catch (e) { console.error("Invalid WS Payload"); }
+    });
+});
 app.listen(3000, () => console.log('Sovereign Link: Port 3000'));

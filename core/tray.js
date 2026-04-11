@@ -77,7 +77,11 @@ export class SystemTray {
 
             <div class="grid-toggles">
                 <div class="toggle-box active" id="toggle-wifi">${this.icons.wifi} <span>Network</span></div>
-                <div class="toggle-box" id="toggle-bluetooth">${this.icons.bluetooth} <span>Bluetooth</span></div>
+                <div class="toggle-box" id="toggle-bluetooth">
+                    <div id="bt-tray-icon-container">${this.icons.bluetooth}</div>
+                    <span id="bt-status-label">Bluetooth</span>
+                    <small id="bt-proximity-val" style="font-size: 9px; opacity: 0.5;">Offline</small>
+                </div>
             </div>
 
             <div class="info-line" id="tray-battery-stat">
@@ -114,7 +118,15 @@ export class SystemTray {
                 .mini-btns { display: flex; gap: 10px; }
                 .mini-btns button { background: rgba(80, 26, 111, 0.8); border: none; color: white; padding: 10px; border-radius: 12px; cursor: pointer; transition: 0.2s; }
                 .danger-btn { background: #542574f2; border: none; color: white; padding: 10px 18px; border-radius: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; }
-                
+                #bt-tray-icon-container.scanning {
+                animation: bt-pulse 1.5s infinite ease-in-out;
+                }
+
+                @keyframes bt-pulse {
+                    0% { transform: scale(1); opacity: 1; }
+                    50% { transform: scale(1.2); opacity: 0.5; color: #7C3AED; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
                 .spinning { animation: tray-spin 2s linear infinite; }
                 @keyframes tray-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
             </style>
@@ -156,6 +168,22 @@ export class SystemTray {
             volumeIcon.style.opacity = val == 0 ? '0.3' : '1';
         };
 
+        // Bluetooth Toggle Logic
+        const btToggle = this.el.querySelector('#toggle-bluetooth');
+        btToggle.onclick = (e) => {
+            // 1. Visually indicate scanning
+            e.currentTarget.classList.toggle('active');
+            
+            // 2. Trigger the Kernel pairing mode
+            if (this.kernel && typeof this.kernel.initHardwarePairing === 'function') {
+                    this.kernel.initHardwarePairing();
+                } else if (window.kernel && typeof window.kernel.initHardwarePairing === 'function') {
+                    window.kernel.initHardwarePairing();
+                } else {
+                    console.warn("» TRAY_FAULT: initHardwarePairing method missing in Kernel.");
+                }
+            };
+
         // Handle Mute Toggle (Clicking the Icon)
         volumeIcon.style.cursor = 'pointer';
         volumeIcon.onclick = () => {
@@ -196,6 +224,38 @@ export class SystemTray {
             update();
             battery.onlevelchange = update;
             battery.onchargingchange = update;
+        }
+    }
+
+    /**
+     * DYNAMIC BLUETOOTH STATUS (UI Update)
+     */
+    updateBluetoothStatus(rssi) {
+        // These elements exist inside the Tray Menu HTML
+        const container = this.el.querySelector('#bt-tray-icon-container');
+        const proximity = this.el.querySelector('#bt-proximity-val');
+        const toggleBox = this.el.querySelector('#toggle-bluetooth');
+
+        if (!toggleBox) return; // Safety check
+
+        if (rssi === null) {
+            toggleBox.classList.remove('active');
+            if (container) container.style.color = 'white';
+            if (proximity) proximity.innerText = 'Offline';
+            return;
+        }
+
+        toggleBox.classList.add('active');
+        
+        if (rssi > -65) {
+            container.style.color = '#4ade80'; 
+            proximity.innerText = 'Anchor: Strong';
+        } else if (rssi > -85) {
+            container.style.color = '#7C3AED'; 
+            proximity.innerText = 'Anchor: Near';
+        } else {
+            container.style.color = '#ef4444'; 
+            proximity.innerText = 'Anchor: Weak';
         }
     }
 

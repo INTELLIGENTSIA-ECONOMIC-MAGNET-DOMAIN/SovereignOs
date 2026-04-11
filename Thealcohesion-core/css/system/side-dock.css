@@ -54,8 +54,14 @@
     backdrop-filter: blur(15px) saturate(180%);
     border-right: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
-    will-change: transform, opacity;
+    transform: translateZ(0);
+    backface-visibility: hidden;
     z-index: 1000;
+}
+
+#side-dock.animating,
+#side-dock:active {
+    will-change: transform;
 }
 
 /* The Refraction Overlay - This gives the 'glimmer' as it moves */
